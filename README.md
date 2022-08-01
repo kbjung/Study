@@ -8,3 +8,5 @@
 + 05장 파이썬 날개달기
   - 내용 [ipynb](https://github.com/kbjung/Jump_to_Python/blob/main/ch05.ipynb)
   - 연습문제 [ipynb](https://github.com/kbjung/Jump_to_Python/blob/main/ch05_ex.ipynb)
++ 07장 정규표현식 ⏳
+  - 내용 [ipynb](https://github.com/kbjung/Jump_to_Python/blob/main/ch07.ipynb)
