@@ -9,3 +9,4 @@
   - [script2](https://github.com/kbjung/SQL/blob/main/MySQL/ch5_database_entity02.sql)
   - [script3](https://github.com/kbjung/SQL/blob/main/MySQL/ch5_database_entity03.sql)
 + 6\. SQL 기본 문법(SELECT ~ FROM ~ WHERE) [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch6.sql)
++ 7\. SQL SELECT 절의 형식(ORDER BY, GROUP BY) [script(https://github.com/kbjung/SQL/blob/main/MySQL/ch7.sql)
