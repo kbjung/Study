@@ -48,7 +48,7 @@ prepare mySQL from 'select mem_name, height from member order by height limit ?'
 execute mySQL using @count;
 
 select avg(price) '평균 가격' from buy; -- 결과 : 142.9167
--- 명시적 변환
+-- 명시적 형변환
 select cast(avg(price) as signed) '평균 가격' from buy; -- 부호가 있는 정수로 나타냄. 결과 : 143
 
 select cast('2022$12$12' as date); -- 2022-12-12 출력
