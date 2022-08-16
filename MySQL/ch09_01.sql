@@ -41,7 +41,7 @@ set @height = 166;
 select @txt, mem_name from member where height > @height;
 
 set @count = 3;
-select mem_name, height from member order by height limit @count; -- 오류. 문법적으로 지원하지 않음.
+select mem_name, height from member order by height limit @count; -- 오류. limit에 변수사용은 문법적으로 지원하지 않음.
 
 set @count = 3;
 prepare mySQL from 'select mem_name, height from member order by height limit ?';
