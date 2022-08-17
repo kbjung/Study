@@ -2,7 +2,7 @@
 + version : MySQL 8.0
 + 강의 링크 [youtube](https://youtube.com/playlist?list=PLVsNizTWUw7GCfy5RH27cQL5MeKYnl8Pm)
 
-### 강의
+### 👨‍🏫 강의
 + 04\. 데이터베이스 만들기 [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch04_make_database.sql)
 + 05\. 데이터베이스 개체(인덱스, 뷰, 스토어드 프로시저) [script1](https://github.com/kbjung/SQL/blob/main/MySQL/ch05_database_entity01.sql) / [script2](https://github.com/kbjung/SQL/blob/main/MySQL/ch05_database_entity02.sql) / [script3](https://github.com/kbjung/SQL/blob/main/MySQL/ch05_database_entity03.sql)
 + 06\. SQL 기본 문법(SELECT ~ FROM ~ WHERE) [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch06.sql)
