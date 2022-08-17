@@ -13,7 +13,7 @@ SELECT addr, height, debut_date FROM member WHERE mem_name = '블랙핑크';
 SELECT addr, height, debut_date FROM member;
 SELECT height, debut_date, addr FROM member; -- 열 순서 바꾸어 출력
 
-SELECT height 키, debut_date "데뷔 일자", addr FROM member; -- 열 이름 부여(참조, 별명)
+SELECT height 키, debut_date "데뷔 일자", addr FROM member; -- 열 이름 부여(참조, 별명(alias, 알리아스), 별칭)
 
 SELECT * FROM member WHERE mem_number = 4;
 SELECT * FROM member WHERE mem_number = 40;
