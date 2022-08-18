@@ -14,3 +14,4 @@
 + 12\. GUI 환경에서 테이블 생성하기, SQL로 테이블 만들기 [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch12.sql)
 + 13\. SQL 테이블 제약조건(기본키, 외래키, 고유키) [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch13.sql)
 + 14\. 가상의 테이블 : 뷰(생성, 수정, 삭제) [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch14.sql)
++ 15\. 인덱스의 개념과 장단점, 클러스터형 인덱스와 보조 인덱스 [script]()
