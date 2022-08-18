@@ -17,4 +17,5 @@
 + 15\. 인덱스의 개념과 장단점, 클러스터형 인덱스와 보조 인덱스 [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch15.sql)
 + 16\. 인덱스의 내부 작동 원리와 구조, 인덱스에서 데이터 검색하기 [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch16.sql)
 + 17\. 인덱스의 생성과 제거 문법(CREATE INDEX, DROP INDEX) [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch17.sql)
-+ 18\. 스토어드 프로시저(stored procedure)의 개념과 사용 방법(입출력 매개변수의 활용 방법)
++ 18\. 스토어드 프로시저(stored procedure)의 개념과 사용 방법(입출력 매개변수의 활용 방법) [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch18.sql)
++ 19\. 스토어드 함수와 커서의 개념, 커서(cursor)의 단계별 실습 방법
