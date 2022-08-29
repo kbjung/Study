@@ -2,7 +2,7 @@
 + version : MySQL 8.0
 + 강의 링크 [youtube](https://youtube.com/playlist?list=PLVsNizTWUw7GCfy5RH27cQL5MeKYnl8Pm)
 
-### 👨‍🏫 강의
+### 👨‍🏫 강의(ch.01-23)
 + 04\. 데이터베이스 만들기 [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch04_make_database.sql)
 + 05\. 데이터베이스 개체(인덱스, 뷰, 스토어드 프로시저) [script1](https://github.com/kbjung/SQL/blob/main/MySQL/ch05_database_entity01.sql) / [script2](https://github.com/kbjung/SQL/blob/main/MySQL/ch05_database_entity02.sql) / [script3](https://github.com/kbjung/SQL/blob/main/MySQL/ch05_database_entity03.sql)
 + 06\. SQL 기본 문법(SELECT ~ FROM ~ WHERE) [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch06.sql)
@@ -22,4 +22,4 @@
 + 20\. 자동으로 실행되는 트리거(trigger)의 개념과 트리거를 활용하여 데이터 백업하는 방법 [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch20.sql)
 + 21\. SQL과 파이썬 연결을 위한 파이썬 설치하기
 + 22\. 파이썬과 MySQL 연동하기 [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch22.sql) / [ipynb1](https://github.com/kbjung/SQL/blob/main/MySQL/ch22_01.ipynb) / [ipynb2](https://github.com/kbjung/SQL/blob/main/MySQL/ch22_02.ipynb) / [ipynb3](https://github.com/kbjung/SQL/blob/main/MySQL/ch22_03.ipynb)
-+ 23\. 마우스 클릭만으로 데이터베이스를 입력하거나 조회할 수 있는 GUI 응용 프로그램 만들기(완강)
++ 23\. 마우스 클릭만으로 데이터베이스를 입력하거나 조회할 수 있는 GUI 응용 프로그램 만들기(완강) [ipynb](https://github.com/kbjung/SQL/blob/main/MySQL/ch23.ipynb)
