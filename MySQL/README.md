@@ -21,4 +21,5 @@
 + 19\. 스토어드 함수와 커서의 개념, 커서(cursor)의 단계별 실습 방법 [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch19.sql)
 + 20\. 자동으로 실행되는 트리거(trigger)의 개념과 트리거를 활용하여 데이터 백업하는 방법 [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch20.sql)
 + 21\. SQL과 파이썬 연결을 위한 파이썬 설치하기
-+ 22\. 파이썬과 MySQL 연동하기
++ 22\. 파이썬과 MySQL 연동하기 [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch22.sql) / [ipynb1](https://github.com/kbjung/SQL/blob/main/MySQL/ch22_01.ipynb) / [ipynb2](https://github.com/kbjung/SQL/blob/main/MySQL/ch22_02.ipynb) / [ipynb3](https://github.com/kbjung/SQL/blob/main/MySQL/ch22_03.ipynb)
++ 23\. 마우스 클릭만으로 데이터베이스를 입력하거나 조회할 수 있는 GUI 응용 프로그램 만들기(완강)
