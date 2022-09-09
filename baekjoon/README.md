@@ -5,4 +5,4 @@
 - 3\. 반복문 [ipynb](https://github.com/kbjung/coding_test/blob/main/baekjoon/b_ex03.ipynb)
 - 4\. 1차원 배열 [ipynb](https://github.com/kbjung/coding_test/blob/main/baekjoon/b_ex04.ipynb)
 - 5\. 함수 [ipynb](https://github.com/kbjung/coding_test/blob/main/baekjoon/b_ex05.ipynb)
-- 6\. 문자열 단계 [ipynb](https://github.com/kbjung/coding_test/blob/main/baekjoon/b_ex06.ipynb)
+- 6\. ⏳ 문자열 단계 [ipynb](https://github.com/kbjung/coding_test/blob/main/baekjoon/b_ex06.ipynb)
