@@ -3,8 +3,8 @@
 + 강의 링크 [youtube](https://youtube.com/playlist?list=PLVsNizTWUw7GCfy5RH27cQL5MeKYnl8Pm)
 
 ### 👨‍🏫 강의(ch.01-23)
-+ 04\. 데이터베이스 만들기 [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch04_make_database.sql)
-+ 05\. 데이터베이스 개체(인덱스, 뷰, 스토어드 프로시저) [script1](https://github.com/kbjung/SQL/blob/main/MySQL/ch05_database_entity01.sql) / [script2](https://github.com/kbjung/SQL/blob/main/MySQL/ch05_database_entity02.sql) / [script3](https://github.com/kbjung/SQL/blob/main/MySQL/ch05_database_entity03.sql)
++ 04\. 데이터베이스 만들기 [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch04.sql)
++ 05\. 데이터베이스 개체(인덱스, 뷰, 스토어드 프로시저) [script1](https://github.com/kbjung/SQL/blob/main/MySQL/ch05_01.sql) / [script2](https://github.com/kbjung/SQL/blob/main/MySQL/ch05_02.sql) / [script3](https://github.com/kbjung/SQL/blob/main/MySQL/ch05_03.sql)
 + 06\. SQL 기본 문법(SELECT ~ FROM ~ WHERE) [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch06.sql)
 + 07\. SQL SELECT 절의 형식(ORDER BY, GROUP BY) [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch07.sql)
 + 08\. 데이터 변경을 위한 SQL문(INSERT, UPDATE, DELETE) [script](https://github.com/kbjung/SQL/blob/main/MySQL/ch08.sql)
