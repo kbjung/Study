@@ -46,5 +46,5 @@
   [ipynb1](https://github.com/kbjung/Study/blob/main/SQL/MySQL/ch22_01.ipynb) /
   [ipynb2](https://github.com/kbjung/Study/blob/main/SQL/MySQL/ch22_02.ipynb) /
   [ipynb3](https://github.com/kbjung/Study/blob/main/SQL/MySQL/ch22_03.ipynb)
-+ 23\. 마우스 클릭만으로 데이터베이스를 입력하거나 조회할 수 있는 GUI 응용 프로그램 만들기()
++ 23\. 마우스 클릭만으로 데이터베이스를 입력하거나 조회할 수 있는 GUI 응용 프로그램 만들기(END)
   [ipynb](https://github.com/kbjung/Study/blob/main/SQL/MySQL/ch23.ipynb)
