@@ -26,4 +26,4 @@
 + 08 장 종합문제
   - 연습문제
     [ipynb](https://github.com/kbjung/Study/blob/main/Jump_to_Python/ch08_ex.ipynb) /
-    [html](https://kbjung.github.io/Study/Jump_to_Python/ch8_ex.html)
+    [html](https://kbjung.github.io/Study/Jump_to_Python/ch08_ex.html)
