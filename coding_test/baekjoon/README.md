@@ -22,3 +22,5 @@
   [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex07.ipynb) /
   [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex07.html)
 - ⏳ 8\. 기본 수학 2단계
+  [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex08.ipynb) /
+  [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex08.html)
