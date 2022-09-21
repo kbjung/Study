@@ -15,12 +15,13 @@
 - 5\. 함수
   [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex05.ipynb) /
   [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex05.html)
-- 6\. 문자열 단계
+- 6\. 문자열
   [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex06.ipynb) /
   [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex06.html)
-- 7\. 기본 수학 1단계
+- 7\. 기본 수학 1
   [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex07.ipynb) /
   [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex07.html)
-- ⏳ 8\. 기본 수학 2단계
+- 8\. 기본 수학 2
   [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex08.ipynb) /
   [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex08.html)
+- ⏳ 9\. 정렬
