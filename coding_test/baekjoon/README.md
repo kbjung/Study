@@ -2,7 +2,7 @@
 ### 단계별로 풀어보기
 - 1\. 입출력과 사칙연산
   [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex01.ipynb) /
-  [html](https://kbjung.github.io/coding_test/baekjoon/b_ex01.html)
+  [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex01.html)
 - 2\. 조건문
   [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex02.ipynb) /
   [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex02.html)
