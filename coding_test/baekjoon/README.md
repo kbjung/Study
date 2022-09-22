@@ -25,3 +25,5 @@
   [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex08.ipynb) /
   [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex08.html)
 - ⏳ 9\. 정렬
+  [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex09.ipynb) /
+  [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex09.html)
