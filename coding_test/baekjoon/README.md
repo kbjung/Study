@@ -28,3 +28,5 @@
   [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex09.ipynb) /
   [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex09.html)
 - ⏳ 10\. 재귀
+  [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex10.ipynb) /
+  [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex10.html)
