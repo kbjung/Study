@@ -27,6 +27,9 @@
 - 9\. 정렬
   [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex09.ipynb) /
   [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex09.html)
-- ⏳ 10\. 재귀
+- 10\. 재귀
   [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex10.ipynb) /
   [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex10.html)
+- ⏳ 11\. 브루트 포스
+  [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex11.ipynb) /
+  [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex11.html)
