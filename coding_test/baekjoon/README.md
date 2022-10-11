@@ -34,3 +34,5 @@
   [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex11.ipynb) /
   [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex11.html)
 - ⏳ 12\. 집합과 맵
+  [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex12.ipynb) /
+  [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex12.html)
