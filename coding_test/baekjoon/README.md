@@ -33,6 +33,9 @@
 - 11\. 브루트 포스
   [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex11.ipynb) /
   [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex11.html)
-- ⏳ 12\. 집합과 맵
+- 12\. 집합과 맵
   [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex12.ipynb) /
   [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex12.html)
+- ⏳ 13\. 기하 1 단계
+  [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex13.ipynb) /
+  [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex13.html)
