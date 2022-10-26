@@ -40,3 +40,5 @@
   [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex13.ipynb) /
   [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex13.html)
 - ⏳ 14\. 정수론 및 조합론
+  [ipynb](https://github.com/kbjung/Study/blob/main/coding_test/baekjoon/b_ex14.ipynb) /
+  [html](https://kbjung.github.io/Study/coding_test/baekjoon/b_ex14.html)
