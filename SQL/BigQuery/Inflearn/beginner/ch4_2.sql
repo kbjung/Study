@@ -1,0 +1,8 @@
+SELECT
+  CAST(1 AS STRING);
+
+-- SELECT
+--   CAST('카일스쿨' AS INT64);
+
+SELECT
+  SAFE_CAST('카일스쿨' AS INT64);
