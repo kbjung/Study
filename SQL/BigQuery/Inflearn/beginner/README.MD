@@ -10,3 +10,4 @@
   - ch3-3 [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch3_3.sql)
   - ch4-2 [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch4_2.sql)
   - ch4-3 [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch4_3.sql)
+  - ch4-4 [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch4_4.sql)
