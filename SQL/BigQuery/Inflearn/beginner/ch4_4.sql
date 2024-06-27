@@ -1,0 +1,7 @@
+-- DATE
+-- DATETIME
+-- TIMESTAMP
+
+SELECT
+  CURRENT_TIMESTAMP() AS timestamp_col,
+  DATETIME(CURRENT_TIMESTAMP(), 'Asia/Seoul') AS datetime_col
