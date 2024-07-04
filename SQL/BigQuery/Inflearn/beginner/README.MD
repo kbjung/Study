@@ -1,15 +1,29 @@
 # ⏳초보자를 위한 BigQuery(SQL) 입문
 - 강의 링크 [link](https://www.inflearn.com/course/%EC%B4%88%EB%B3%B4%EC%9E%90%EB%A5%BC-%EC%9C%84%ED%95%9C-%EB%B9%85%EC%BF%BC%EB%A6%AC-sql-%EC%9E%85%EB%AC%B8/dashboard)
 - 코드
-  - ch1-2 [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch1-2.sql)
-  - ch2-3 [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch2-3.sql)
-  - ch2-4 [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch2-4.sql)
-  - ch2-5 [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch2-5.sql)
-  - ch2-6 [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch2-6.sql)
-  - ch2-8 [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch2-8.sql)
-  - ch3-3 [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch3-3.sql)
-  - ch4-2 [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch4-2.sql)
-  - ch4-3 [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch4-3.sql)
-  - ch4-4 [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch4-4.sql)
-  - ch4-5 [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch4-5.sql)
-  
+  - ch1-2 기초 지식 
+    - [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch1-2.sql)
+  - ch2-3 데이터 탐색(SELECT, FROM, WHERE) 
+    - [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch2-3.sql)
+  - ch2-4 SELECT 연습 문제 
+    - [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch2-4.sql)
+  - ch2-5 집계(GROUP BY + HAVING + SUM/COUNT)
+    - [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch2-5.sql)
+  - ch2-6 연습 문제 1 ~ 17번
+    - [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch2-6.sql)
+  - ch2-8 새로운 집계 함수(GROUP BY ALL)
+    - [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch2-8.sql)
+  - ch3-3 쿼리 작성 템플릿과 생산성 도구
+    - [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch3-3.sql)
+  - ch4-2 데이터 타입과 변환(CAST, SAFE_CAST)
+    - [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch4-2.sql)
+  - ch4-3 문자열 함수(CONCAT, SPLIT, REPLACE, TRIM, UPPER)
+    - [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch4-3.sql)
+  - ch4-4 날짜 및 시간 데이터(타임존, UTC, Millisecond, TIMESTAMP/DATETIME, EXTRACT, DATETIME_TRUNC, PARSE_DATETIME, FORMAT_DATETIME)
+    - [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch4-4.sql)
+  - ch4-5 시간 데이터 연습 문제 1 ~ 5번
+    - [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch4-5.sql)
+  - ch4-6 조건문(CASE WHEN, IF)
+    - [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch4-6.sql)
+  - ch4-7 조건문 연습 문제 1 ~ 6번
+    - [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch4-7.sql)
