@@ -9,4 +9,4 @@
 - 03\. 웹사이트 크롤링 연습01 [[ipynb]](https://github.com/kbjung/Study/blob/main/Crawling/02_beautifulsoup/03_crawling01.ipynb)
 - 04\. 웹사이트 크롤링 연습02 [[ipynb]](https://github.com/kbjung/Study/blob/main/Crawling/02_beautifulsoup/04_crawling02.ipynb)
 - 05\. selenium 사용법01 [[ipynb]](https://github.com/kbjung/Study/blob/main/Crawling/02_beautifulsoup/05_Selenium_%EC%82%AC%EC%9A%A9%EB%B2%95.ipynb)
-- 06\. selenium 사용법02 [[ipynb]](https://github.com/kbjung/Study/blob/main/Crawling/02_beautifulsoup/06_%EC%95%84%EB%A7%88%EC%A1%B4_%EC%9B%B9_%ED%81%AC%EB%A1%A4%EB%A7%81.ipynb)
+- ⛔(pandas 필요) 06\. selenium 사용법02 [[ipynb]](https://github.com/kbjung/Study/blob/main/Crawling/02_beautifulsoup/06_%EC%95%84%EB%A7%88%EC%A1%B4_%EC%9B%B9_%ED%81%AC%EB%A1%A4%EB%A7%81.ipynb)
