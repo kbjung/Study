@@ -5,7 +5,7 @@
 - 03\. colab 사용법, 리스트, 딕셔너리, 집합, 튜플, 문자열 포매팅, 인덱싱, 스라이싱, 함수 [[ipynb]](https://github.com/kbjung/Study/blob/main/Crawling/01_python/class03.ipynb)
 ### BeautifulSoup 사용법 연습
 - 01\. bs, find 사용법 [[ipynb]](https://github.com/kbjung/Study/blob/main/Crawling/02_beautifulsoup/01_bs01.ipynb)
-- 02\. bs, find, select 사용법 [[ipynb]](https://github.com/kbjung/Study/blob/main/Crawling/02_beautifulsoup/01_bs02.ipynb)
+- 02\. bs, find, select 사용법 [[ipynb]](https://github.com/kbjung/Study/blob/main/Crawling/02_beautifulsoup/02_bs02.ipynb)
 - 03\. 웹사이트 크롤링 연습01 [[ipynb]](https://github.com/kbjung/Study/blob/main/Crawling/02_beautifulsoup/03_crawling01.ipynb)
 - 04\. 웹사이트 크롤링 연습02 [[ipynb]](https://github.com/kbjung/Study/blob/main/Crawling/02_beautifulsoup/04_crawling02.ipynb)
 - 05\. selenium 사용법01 [[ipynb]](https://github.com/kbjung/Study/blob/main/Crawling/02_beautifulsoup/05_Selenium_%EC%82%AC%EC%9A%A9%EB%B2%95.ipynb)
