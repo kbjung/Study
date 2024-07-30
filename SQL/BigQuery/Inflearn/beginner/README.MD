@@ -27,3 +27,5 @@
     - [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch4-6.sql)
   - ch4-7 조건문 연습 문제 1 ~ 6번
     - [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch4-7.sql)
+  - ch5-4 JOIN 쿼리 작성하기
+    - [sql](https://github.com/kbjung/Study/blob/main/SQL/BigQuery/Inflearn/beginner/ch5-4.sql)
