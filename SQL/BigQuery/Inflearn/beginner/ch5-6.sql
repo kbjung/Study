@@ -263,5 +263,5 @@ where
 group by
   generation
 order by
-  2 desc # 결과 : 1세대 33, 2세대 10
+  2 desc # 결과 : 1세대 33마리, 2세대 10마리
 
