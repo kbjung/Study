@@ -17,6 +17,7 @@ SELECT
 # MariaDB
 SELECT
   CASE
-    WHEN '카일스쿨' REGEXP '^[0-9]+$' THEN CAST('카일스쿨' AS SIGNED)
-    ELSE NULL
+    WHEN '카일스쿨' REGEXP '^[0-9]+$' 
+      THEN CAST('카일스쿨' AS SIGNED)
+      ELSE NULL
   END AS result;
