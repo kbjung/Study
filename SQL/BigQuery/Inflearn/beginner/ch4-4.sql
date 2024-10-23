@@ -45,20 +45,20 @@ SELECT
 
 -- 마지막 날을 알고 싶은 경우
 SELECT
-  LAST_DAY(DATETIME '2024-01-03 15:30:00') AS last_day,
-  LAST_DAY(DATETIME '2024-01-03 15:30:00', MONTH) AS last_day_month,
-  LAST_DAY(DATETIME '2024-01-03 15:30:00', WEEK) AS last_day_week,
-  LAST_DAY(DATETIME '2024-01-03 15:30:00', WEEK(SUNDAY)) AS last_day_week_sun,
-  LAST_DAY(DATETIME '2024-01-03 15:30:00', WEEK(MONDAY)) AS last_day_week_mon;
+  LAST_DAY(DATETIME '2024-01-03 15:30:00') AS last_day, # 2024-01-31
+  LAST_DAY(DATETIME '2024-01-03 15:30:00', MONTH) AS last_day_month, # 2024-01-31
+  LAST_DAY(DATETIME '2024-01-03 15:30:00', WEEK) AS last_day_week, # 2024-01-06, 주의 마지막 날 (일요일 기준)
+  LAST_DAY(DATETIME '2024-01-03 15:30:00', WEEK(SUNDAY)) AS last_day_week_sun, # 2024-01-06, 주의 마지막 날 (일요일 기준)
+  LAST_DAY(DATETIME '2024-01-03 15:30:00', WEEK(MONDAY)) AS last_day_week_mon; # 2024-01-07, 주의 마지막 날 (월요일 기준)
 
 
 
 -- 두 DATETIME의 차이를 알고 싶은 경우
 SELECT
-  DATETIME_DIFF(first_datetime, second_datetime, DAY) AS day_diff1,
-  DATETIME_DIFF(second_datetime, first_datetime, DAY) AS day_diff2,
-  DATETIME_DIFF(first_datetime, second_datetime, MONTH) AS month_diff,
-  DATETIME_DIFF(first_datetime, second_datetime, WEEK) AS week_diff
+  DATETIME_DIFF(first_datetime, second_datetime, DAY) AS day_diff1, # 1187
+  DATETIME_DIFF(second_datetime, first_datetime, DAY) AS day_diff2, # -1187
+  DATETIME_DIFF(first_datetime, second_datetime, MONTH) AS month_diff, # 39
+  DATETIME_DIFF(first_datetime, second_datetime, WEEK) AS week_diff # 170
 FROM(
   SELECT
     DATETIME '2024-04-02 10:20:00' AS first_datetime,
