@@ -1,4 +1,4 @@
-# [❌] 1. 트레이너가 포켓몬을 포획한 날짜(catch_date)를 기준으로, 2023년 1월에 포획한 포켓몬의 수를 계산해주세요.
+# [❌] 1. 트레이너가 포켓몬을 포획한 날짜(catch_date)를 기준으로, 2023년 1월에 포획한 포켓몬의 수를 계산해주세요.(trainer_pokemon)
 
 ## mine(서울 시간으로 변환 필요)
 SELECT
@@ -37,8 +37,23 @@ WHERE
   AND EXTRACT(MONTH FROM DATETIME(catch_datetime, 'Asia/Seoul')) = 1;
 -- 결과 : 85개
 
+SELECT
+  count(id) as cnt
+FROM(
+  SELECT
+    id,
+    catch_date,
+    DATE(DATETIME(catch_datetime, 'Asia/Seoul')) AS  catch_datetime_kr
+  FROM basic.trainer_pokemon
+)
+WHERE
+  EXTRACT(YEAR FROM catch_datetime_kr) = 2023 and
+  EXTRACT(MONTH FROM catch_datetime_kr) = 1
+-- 결과 : 85개
 
-# [⭕] 2. 배틀이 일어난 시간(battle_datetime)을 기준으로, 오전6시에서 오후6시 사이에 일어난 배틀의 수를 계산해주세요.
+
+
+# [⭕] 2. 배틀이 일어난 시간(battle_datetime)을 기준으로, 오전6시에서 오후6시 사이에 일어난 배틀의 수를 계산해주세요.(battle)
 
 ## mine
 SELECT
@@ -93,8 +108,8 @@ ORDER BY
 
 
 
-# [❌] 3. 각 트레이너별로 그들이 포켓몬을 포획한 첫 날(catch_date)를 찾고, 그 날짜를 'DD/MM/YYYY' 형식으로 출력해주세요.
---   (2024-01-01 => 01/01/2024)
+# [❌] 3. 각 트레이너별로 그들이 포켓몬을 포획한 첫 날(catch_date)를 찾고, 그 날짜를 'DD/MM/YYYY' 형식으로 출력해주세요.(trainer_pokemon)
+-- (2024-01-01 => 01/01/2024)
 
 ## mine(서울 시간으로 변환 필요)
 SELECT
@@ -140,7 +155,7 @@ ORDER BY
 
 
 
-# [⭕] 4. 배틀이 일어난 날짜(battle_date)를 기준으로,요일별로 배틀이 얼마나 자주 일어났는지 계산해주세요.
+# [⭕] 4. 배틀이 일어난 날짜(battle_date)를 기준으로,요일별로 배틀이 얼마나 자주 일어났는지 계산해주세요.(battle)
 
 ## mine
 SELECT
@@ -173,7 +188,9 @@ GROUP BY
 ORDER BY
   day_of_week;
 
-# [❌] 5. 트레이너가 포켓몬을 처음으로 포획한 날짜와 마지막으로 포획한 날짜의 간격이 큰 순으로 정렬하는 쿼리를 작성해주세요.
+
+
+# [❌] 5. 트레이너가 포켓몬을 처음으로 포획한 날짜와 마지막으로 포획한 날짜의 간격이 큰 순으로 정렬하는 쿼리를 작성해주세요.(trainer_pokemon)
 
 ## mine(서울 시간으로 변환 필요)
 SELECT
