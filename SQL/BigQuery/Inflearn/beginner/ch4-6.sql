@@ -1,6 +1,6 @@
 # CASE WHEN
 
-# Rock이나 Ground 타입을 Rock&Ground 타입으로 변경하여 새로운 타입 분류 통계
+# Rock이나 Ground 타입을 Rock&Ground 타입으로 변경하여 새로운 타입 분류 통계(pokemon)
 
 SELECT
   new_type1,
@@ -17,7 +17,7 @@ FROM(
 GROUP BY
   new_type1;
 
-# 포켓몬의 공격력을 50이상이면 Strong, 100이상이면 Very Strong, 나머진 Weak으로 분류
+# 포켓몬의 공격력을 50이상이면 Strong, 100이상이면 Very Strong, 나머진 Weak으로 분류(pokemon)
 -- 조건문 순서 중요성
 -- case문의 첫번째 조건에 확인된 줄은 다음 조건에서 확인하지 않는다
 -- 주의! 조건문 순서에 따라 결과가 다라진다
