@@ -1,4 +1,4 @@
-# [⭕] 1. 포켓몬의 'speed'가 70이상이면 '빠름', 그렇지 않으면 '느림'으로 표시하는 새로운 컬럼 'Speed_Category'를 만들어주세요
+# [⭕] 1. 포켓몬의 'speed'가 70이상이면 '빠름', 그렇지 않으면 '느림'으로 표시하는 새로운 컬럼 'Speed_Category'를 만들어주세요.(pokemon)
 
 ## mine
 
@@ -22,7 +22,7 @@ FROM basic.pokemon;
 
 
 
-# [⭕] 2. 포켓몬의 'type1'에 따라 'Water', 'Fire', 'Electric' 타입은 각각 '물', '불', '전기'로, 그 외 타입은 '기타'로 분류하는 새로운 컬럼 'type_Korean'을 만들어주세요
+# [⭕] 2. 포켓몬의 'type1'에 따라 'Water', 'Fire', 'Electric' 타입은 각각 '물', '불', '전기'로, 그 외 타입은 '기타'로 분류하는 새로운 컬럼 'type_Korean'을 만들어주세요.(pokemon)
 
 # mine
 
@@ -53,8 +53,7 @@ FROM basic.pokemon;
 
 
 
-# [⭕] 3. 각 포켓몬의 총점(total)을 기준으로, 300 이하면 'Low', 301에서 500 사이면 
--- 'Medium', 501 이상이면 'High'로 분류해주세요
+# [⭕] 3. 각 포켓몬의 총점(total)을 기준으로, 300 이하면 'Low', 301에서 500 사이면 'Medium', 501 이상이면 'High'로 분류해주세요.(pokemon)
 
 ## mine
 
@@ -83,7 +82,7 @@ FROM basic.pokemon;
 
 
 
-# [⭕] 4. 각 트레이너의 배지 개수(badge_count)를 기준으로, 5개 이하면 'Beginner', 6개에서 8개 사이면 'Intermediate', 그 이상이면 'Advanced'로 분류해주세요.
+# [⭕] 4. 각 트레이너의 배지 개수(badge_count)를 기준으로, 5개 이하면 'Beginner', 6개에서 8개 사이면 'Intermediate', 그 이상이면 'Advanced'로 분류해주세요.(trainer)
 
 ## mine
 
@@ -119,7 +118,7 @@ GROUP BY
 
 
 
-# [⭕] 5. 트레이너가 포켓몬을 포획한 날짜(catch_date)가 '2023-01-01' 이후이면 'Recent', 그렇지 않으면 'Old'로 분류해주세요.
+# [⭕] 5. 트레이너가 포켓몬을 포획한 날짜(catch_date)가 '2023-01-01' 이후이면 'Recent', 그렇지 않으면 'Old'로 분류해주세요.(trainer_pokemon)
 
 ## mine
 
@@ -171,7 +170,7 @@ FROM basic.trainer_pokemon;
 
 
 
-# [⭕] 6. 배틀에서 승자(winner_id)가 player1_id와 같으면 'Player 1 Wins', player2_id와 같으면 'Player 2 Wins', 그렇지 않으면 'Draw'로 결과가 나오게 해주세요
+# [⭕] 6. 배틀에서 승자(winner_id)가 player1_id와 같으면 'Player 1 Wins', player2_id와 같으면 'Player 2 Wins', 그렇지 않으면 'Draw'로 결과가 나오게 해주세요.(battle)
 
 ## mine
 
