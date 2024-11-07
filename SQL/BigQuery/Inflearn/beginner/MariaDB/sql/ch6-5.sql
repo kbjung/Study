@@ -1,0 +1,166 @@
+-- Active: 1728371458573@@127.0.0.1@3306@inflearn-bigquery
+
+# 데이터 검증
+
+# Q. 각 트레이너의 승리 비율을 계산, 배틀에 참여한 횟수가 9회이상인 경우만 계산 
+  -- 트레이너가 승리한 비율 구하기
+    -- 트레이너가 참여한 배틀의 수 구하기
+    -- 트레이너가 승리한 배틀의 수 구하기
+    -- 두개 조합해서 승리한 비율 구하기
+  -- 배틀의 수가 9이상만 추출
+
+## step1. id가 7인 플레이어가 이긴 확률을 구해보자. (샘플을 이용해 예상되는 결과 검증)
+SELECT *
+FROM battle
+-- LIMIT 1
+WHERE 
+    (player1_id = 7) OR (player2_id = 7)
+    # id가 7인 플레이어가 경기한 횟수 : 9번
+
+SELECT *
+FROM battle
+-- LIMIT 1
+WHERE 
+    winner_id = 7
+    # id가 7인 플레이어가 이긴 횟수 : 5번
+    # id가 7인 플레이거가 이긴 확률 : 5/9 = 0.55556
+
+## step1_sol
+    # 통합 데이터 생성(player1, 2를 구분하지 않아도 되는 테이블 생성)
+SELECT
+  *
+FROM(
+  SELECT
+    id AS battle_id,
+    player1_id AS trainer_id,
+    winner_id
+  FROM battle
+  UNION ALL
+  SELECT
+    id AS battle_id,
+    player2_id AS trainer_id,
+    winner_id
+  FROM battle
+) AS combined_battles
+ORDER BY battle_id
+
+WITH battle_basic AS(
+  SELECT
+    id AS battle_id,
+    player1_id AS trainer_id,
+    winner_id
+  FROM battle
+  UNION ALL
+  SELECT
+    id AS battle_id,
+    player2_id AS trainer_id,
+    winner_id
+  FROM battle
+)
+SELECT
+  trainer_id,
+  COUNT(*) AS total_battles,
+  COUNT(DISTINCT battle_id) AS unique_battles
+FROM battle_basic
+WHERE 
+  trainer_id = 7
+GROUP BY
+  trainer_id
+
+
+### trainer_id와 winner_id를 활용하여 win, lose, draw가 기록된 컬럼 생성.
+WITH battle_basic AS(
+  SELECT
+    id AS battle_id,
+    player1_id AS trainer_id,
+    winner_id
+  FROM battle
+  UNION ALL
+  SELECT
+    id AS battle_id,
+    player2_id AS trainer_id,
+    winner_id
+  FROM battle
+)
+SELECT
+  *,
+  CASE
+    WHEN trainer_id = winner_id THEN 'WIN'
+    WHEN trainer_id IS NULL THEN 'DRAW'
+    ELSE 'LOSE'
+  END AS battle_result
+FROM battle_basic
+WHERE 
+  trainer_id = 7
+
+
+### COUNTIF를 사용해 값 구하기
+WITH battle_basic AS(
+  SELECT
+    id AS battle_id,
+    player1_id AS trainer_id,
+    winner_id
+  FROM battle
+  UNION ALL
+  SELECT
+    id AS battle_id,
+    player2_id AS trainer_id,
+    winner_id
+  FROM battle
+), battle_with_result AS(
+  SELECT
+    *,
+    CASE
+      WHEN trainer_id = winner_id THEN 'WIN'
+      WHEN trainer_id IS NULL THEN 'DRAW'
+      ELSE 'LOSE'
+    END AS battle_result
+  FROM battle_basic
+  WHERE 
+    trainer_id = 7
+)
+SELECT
+  trainer_id,
+  SUM(CASE WHEN battle_result = 'WIN' THEN 1 ELSE 0 END) AS win_count,
+  COUNT(battle_id) AS total_battle_count,
+  SUM(CASE WHEN battle_result = 'WIN' THEN 1 ELSE 0 END)/ COUNT(battle_id) AS win_ratio
+FROM battle_with_result
+GROUP BY
+  trainer_id
+
+
+## step2. 전체에 대해 적용
+WITH battle_basic AS(
+  SELECT
+    id AS battle_id,
+    player1_id AS trainer_id,
+    winner_id
+  FROM battle
+  UNION ALL
+  SELECT
+    id AS battle_id,
+    player2_id AS trainer_id,
+    winner_id
+  FROM battle
+), battle_with_result AS(
+  SELECT
+    *,
+    CASE
+      WHEN trainer_id = winner_id THEN 'WIN'
+      WHEN trainer_id IS NULL THEN 'DRAW'
+      ELSE 'LOSE'
+    END AS battle_result
+  FROM battle_basic
+  -- WHERE 
+  --   trainer_id = 7
+)
+SELECT
+  trainer_id,
+  SUM(CASE WHEN battle_result = 'WIN' THEN 1 ELSE 0 END) AS win_count,
+  COUNT(battle_id) AS total_battle_count,
+  SUM(CASE WHEN battle_result = 'WIN' THEN 1 ELSE 0 END)/ COUNT(battle_id) AS win_ratio
+FROM battle_with_result
+GROUP BY
+  trainer_id
+HAVING
+  total_battle_count >= 9
