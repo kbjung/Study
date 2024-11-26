@@ -425,7 +425,7 @@ WHERE
 
 
 
-# 6. 각 포켓몬의 최고 레벨과 최저 레벨을 계산하고, 레벨 차이가 가장 큰 포켓몬의 이름을 출력하세요.
+# [⭕] 6. 각 포켓몬의 최고 레벨과 최저 레벨을 계산하고, 레벨 차이가 가장 큰 포켓몬의 이름을 출력하세요.
 
 -- 필요 정보
   -- trainer_pokemon > pokemon_id, level
@@ -478,33 +478,3 @@ ON pd.pokemon_id = p.id
 
 # 7. 각 트레이너가 가진 포켓몬 중에서 공격력(attack)이 100 이상인 포켓몬과 100 미만인 포켓몬의 수를 각각 계산해주세요. 트레이너의 이름과 두 조건에 해당하는 포켓몬의 수를 출력해주세요
 
--- 필요한 정보
-  -- trainer_pokemon > trainer_id, pokemon_id, status(Released 제외)
-  -- pokemon > id, attack
-  -- trainer > id, name
-  
--- 과정
-  -- 1. trainer_pokemon에서 status가 Released가 아닌 샘플만 추출
-  -- 2. 1번과 pokemon 병합
-  -- 3. 2번에 trainer 병합
-  -- 4. 3번에서 trainer_id별 attack이 100이상, 100미만인 포켓몬의 수 통계
-
--- sol
-SELECT
-  tp.trainer_id,
-  t.name,
-  SUM(CASE WHEN p.attack >= 100 THEN 1 ELSE 0 END) AS over100_cnt,
-  SUM(CASE WHEN p.attack < 100 THEN 1 ELSE 0 END) AS under100_cnt
-FROM trainer_pokemon AS tp
-LEFT JOIN pokemon AS p
-ON tp.pokemon_id = p.id
-LEFT JOIN trainer AS t
-ON tp.trainer_id = t.id
-WHERE
-  status != 'Released'
-GROUP BY
-  1, 2
--- 결과
-  -- 행	trainer_id	name	over100_cnt	under100_cnt
-  -- 1	5	Gary	0	7
-  -- 2	20	Steven	1	4
