@@ -5,4 +5,4 @@
 
 
 ## 전처리 및 EDA
-- 테스트 코드 [[ipynb]](https://github.com/kbjung/Study/blob/main/graduate_school/rcsb/test_xml_load.ipynb) [[html]](https://kbjung.github.io/Study/blob/main/graduate_school/rcsb/test_xml_load.html)
+- 테스트 코드 [[ipynb]](https://github.com/kbjung/Study/blob/main/graduate_school/rcsb/test_xml_load.ipynb) [[html]](https://kbjung.github.io/Study/graduate_school/rcsb/test_xml_load.html)
