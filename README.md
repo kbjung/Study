@@ -1,4 +1,6 @@
 # 📖 Study
+## 대학원 [[상세내용]](https://github.com/kbjung/Study/blob/main/graduate_school/README.md)
++ ai 시스템 구축 [[상세내용]](https://github.com/kbjung/Study/blob/main/graduate_school/rcsb/README.md)
 
 ## SQL [[상세내용]](https://github.com/kbjung/study/tree/main/SQL#readme)
 + 혼자 공부하는 SQL [[상세내용]](https://github.com/kbjung/Study/tree/main/SQL/MySQL#readme)
