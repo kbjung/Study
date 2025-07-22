@@ -1,12 +1,13 @@
 # 📖 Study
-## 대학원 [[상세내용]](https://github.com/kbjung/Study/blob/main/graduate_school/README.md)
-+ ai 시스템 구축 [[상세내용]](https://github.com/kbjung/Study/blob/main/graduate_school/rcsb/README.md)
+## ⏳대학원 [[상세내용]](https://github.com/kbjung/Study/blob/main/graduate_school/README.md)
++ ⏳ai 시스템 구축 [[상세내용]](https://github.com/kbjung/Study/blob/main/graduate_school/rcsb/README.md)
++ 공부 [[상세내용]](https://github.com/kbjung/Study/blob/main/graduate_school/study/README.md)
 
 ## SQL [[상세내용]](https://github.com/kbjung/study/tree/main/SQL#readme)
 + 혼자 공부하는 SQL [[상세내용]](https://github.com/kbjung/Study/tree/main/SQL/MySQL#readme)
-+ ⏳ 초보자를 위한 BigQuery(SQL) 입문 [[상세내용]](https://github.com/kbjung/Study/tree/main/SQL/BigQuery/Inflearn/beginner#readme)
++ 초보자를 위한 BigQuery(SQL) 입문 [[상세내용]](https://github.com/kbjung/Study/tree/main/SQL/BigQuery/Inflearn/beginner#readme)
 
-## ⏳ Crawling [[상세보기]](https://github.com/kbjung/Study/tree/main/Crawling#readme)
+## Crawling [[상세보기]](https://github.com/kbjung/Study/tree/main/Crawling#readme)
 
 ## AI [[상세내용]](https://github.com/kbjung/Study/tree/main/AI)
 + pytorch [[상세내용]](https://github.com/kbjung/Study/blob/main/AI/README.md)
