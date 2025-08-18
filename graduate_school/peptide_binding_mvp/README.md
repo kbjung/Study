@@ -1,4 +1,5 @@
 # ai 시스템 구축 MVP
+## Colab 환경
 + 펩타이드 생성 파이프라인 01
   - 01 펩타이드 생성 : PepMLM
   - 02 구조예측 : ColabFold
