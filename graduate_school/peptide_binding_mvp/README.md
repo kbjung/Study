@@ -1,4 +1,18 @@
 # ai 시스템 구축 MVP
++ 펩타이드 생성 파이프라인 01
+  - 01 펩타이드 생성 : PepMLM
+  - 02 구조예측 : ColabFold
+  - 03 결합력 평가 및 최종 평가 : Pafnucy, Autoduck Vina, PLIP
+  - 코드 [[ipynb]](https://github.com/kbjung/Study/blob/main/graduate_school/peptide_binding_mvp/notebooks/%ED%86%B5%ED%95%A9_%ED%8E%A9%ED%83%80%EC%9D%B4%EB%93%9C_%EB%B0%9C%EA%B5%B4_%ED%8C%8C%EC%9D%B4%ED%94%84%EB%9D%BC%EC%9D%B8_pafnucy_vina_plip.ipynb)
+
++ 펩타이드 생성 파이프라인02
+  - 01 펩타이드 생성 : PepMLM
+  - 02 구조예측 : ColabFold
+  - 03 결합력 평가 및 최종 평가 : PPI-Affinity(파이프라인01보다 정확도+25%), Autoduck Vina, PLIP
+  - 코드 [[ipynb]](https://github.com/kbjung/Study/blob/main/graduate_school/peptide_binding_mvp/notebooks/%ED%86%B5%ED%95%A9_%ED%8E%A9%ED%83%80%EC%9D%B4%EB%93%9C_%EB%B0%9C%EA%B5%B4_%ED%8C%8C%EC%9D%B4%ED%94%84%EB%9D%BC%EC%9D%B8_pafnucy_vina_plip.ipynb)
+
+---
+
 + 펩타이드 생성 ai
   - ESMFold [[ipynb]](https://github.com/kbjung/Study/blob/main/graduate_school/peptide_binding_mvp/notebooks/test_code/protein_folding.ipynb)
   - RFdiffusion Peptide Structure Generation(MVP Test) [[ipynb]](https://github.com/kbjung/Study/blob/main/graduate_school/peptide_binding_mvp/notebooks/test_code/rfdiffusion_peptide_generation.ipynb)
