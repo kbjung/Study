@@ -6,3 +6,7 @@ graduate_school/peptide_binding_mvp/펩타이드 발굴 파이프라인 전체 �
 graduate_school/speaker_diarization/huggingface_token.txt
 graduate_school/business/crawling/\[processing\]naver_shopping_hair_loss_20250910.csv
 *.xlsx
+*.csv
+*.json
+*.txt
+*.html
