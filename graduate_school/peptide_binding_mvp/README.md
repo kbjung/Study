@@ -17,6 +17,12 @@
   - 02\. 구조예측 : ColabFold
   - 03\. 결합력 평가 및 최종 평가 : ipTM(colabfold), PPI-Affinity(파이프라인01보다 정확도+25%), Autoduck Vina, PLIP
   - 코드 [[ipynb]](https://github.com/kbjung/Study/blob/main/graduate_school/peptide_binding_mvp/notebooks/%ED%8E%A9_%ED%8C%8C%EC%9D%B4%ED%94%84%EB%9D%BC%EC%9D%B803(pTM_Vina_PLIP_PPI).ipynb)
+ 
++ 펩타이드 생성 파이프라인 04
+  - 01\. 펩타이드 생성 : PepMLM
+  - 02\. 구조예측 : ColabFold
+  - 03\. 결합력 평가 및 최종 평가 : ipTM(colabfold), Prodigy(파이프라인03보다 정확도+), Autoduck Vina, PLIP
+  - 코드 [[ipynb]](https://github.com/kbjung/Study/blob/main/graduate_school/peptide_binding_mvp/notebooks/%ED%8E%A9_%ED%8C%8C%EC%9D%B4%ED%94%84%EB%9D%BC%EC%9D%B804(ipTM_Vina_PLIP_Prodigy).ipynb)
 ---
 
 + 펩타이드 생성 ai
