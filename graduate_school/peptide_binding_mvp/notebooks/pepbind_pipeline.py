@@ -19,7 +19,6 @@ A안 가중치:
 """
 
 import os
-import sys
 import time
 import csv
 import re
@@ -37,6 +36,8 @@ from Bio.PDB import PDBParser, PDBIO, Select
 from openpyxl import Workbook
 import pandas as pd
 
+import xml.etree.ElementTree as ET
+
 START_TIME = datetime.now()
 
 # =====================================================================
@@ -45,7 +46,7 @@ START_TIME = datetime.now()
 
 # 1) 타깃 단백질 서열 (FASTA의 sequence 부분만)
 TARGET_SEQUENCE = (
-    "AFTVTVPKDLYVVEYGSNMTIECKFPVEKQLDLAALIVYWEMEDKNIIQFVHGEEDLKVQHSSYRQRARLLKDQLSLGNAALQITDVKLQDAGVYRCMISYGGADYKRITVKVNAPYNKINQRILVVDPVTSEHELTCQAEGYPKAEVIWTSSDHQVLSGKTTTTNSKREEKLFNVTSTLRINTTTNEIFYCTFRRLDPEENHTAELVIPELPLAHPPNERT"
+    "AFTVTVPKDLYVVEYGSNMTIECKFPVEKQLDLAALIVYWEMEDKNIIQFVHGEEDLKVQHSSYRQRARLLKDQLSLGNAALQITDVKLQDAGVYRCMISYGGADYKRITVKVNAPYNKINQRILVVDPVTSEHELTCQAEGYPKAEVIWTSSDHQVLSGKTTTTNSKREEKLFNVTSTLRINTTTNEIFYCTFRRLDPEENHTAELVIPELPLAHPPNERT" # PD-L1 단백질 서열
 )
 
 # 2) 생성할 펩타이드 설정
@@ -122,6 +123,45 @@ def init_workspace():
     print("=" * 80)
 
     return folders
+
+
+def parse_prodigy_dg_from_stdout(stdout: str):
+    """
+    PRODIGY stdout에서 ΔG(또는 binding energy)를 추출하는 헬퍼 함수.
+    형식 예시:
+      Binding energy: -12.3 kcal/mol
+      Predicted ΔG: -10.5 kcal/mol
+
+    여러 줄 중 첫 번째 매칭값만 사용.
+    실패하면 None 리턴.
+    """
+    if not stdout:
+        return None
+
+    # 1) 가장 자주 나오는 패턴들 우선 시도
+    patterns = [
+        r"Binding energy\s*[:=]\s*([\-+]?\d+(?:\.\d+)?)",   # Binding energy: -12.3
+        r"Predicted\s*Δ?G\s*[:=]\s*([\-+]?\d+(?:\.\d+)?)",  # Predicted ΔG: -10.5
+        r"\bΔG\s*[:=]\s*([\-+]?\d+(?:\.\d+)?)",             # ΔG: -9.87
+    ]
+
+    for pat in patterns:
+        m = re.search(pat, stdout, re.IGNORECASE)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                pass
+
+    # 2) 백업: stdout 전체에서 "소수점이 있는 첫 번째 실수"
+    m = re.search(r"([\-+]?\d+\.\d+)", stdout)
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            return None
+
+    return None
 
 
 # =====================================================================
@@ -473,10 +513,15 @@ def parse_vina_score_from_stdout(stdout: str):
 
 def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
     """
-    AutoDock Vina 도킹 (Vina 23d1252-mod 기준).
-    - GPU 지원은 없고 CPU에서 동작.
-    - 체인 A(리셉터)/B(펩타이드)로 가정, 리간드 기반 박스 자동 설정.
-    - --log 옵션 없이 stdout을 캡처해서 점수 파싱.
+    AutoDock Vina 도킹 실행 + 요약/상태 로그 기록.
+
+    - vina_summary.csv 컬럼:
+        complex, vina_score, vina_status, receptor_pdbqt, ligand_pdbqt, log_file
+    - vina_status 예시:
+        '정상', '정상(점수=0.0)',
+        '실패: Vina 실행 에러(code=...)',
+        '실패: Vina 실행 에러(code=...)(PDBQT parsing error: ...)',
+        '파싱실패: stdout에서 점수 패턴 없음'
     """
     print("\n" + "=" * 80)
     print("STEP 4: AutoDock Vina 도킹")
@@ -490,7 +535,8 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
         return
 
     vina_dir.mkdir(parents=True, exist_ok=True)
-    summary_rows = [["complex", "vina_score", "receptor_pdbqt", "ligand_pdbqt", "log_file"]]
+    summary_rows = [["complex", "vina_score", "vina_status", "receptor_pdbqt", "ligand_pdbqt", "log_file"]]
+    debug_lines = []
 
     for complex_pdb in rank1_pdbs:
         base = complex_pdb.stem
@@ -506,7 +552,6 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
         )
 
         rec_pdbqt, lig_pdbqt = prepare_pdbqt(rec_pdb, lig_pdb, complex_out_dir)
-
         box = compute_box_from_ligand(lig_pdb)
 
         out_pdbqt = complex_out_dir / f"{base}_vina_out.pdbqt"
@@ -529,28 +574,52 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
             text=True,
         )
 
-        with open(log_file, "w") as lf:
+        with open(log_file, "w", encoding="utf-8") as lf:
             lf.write("=== STDOUT ===\n")
             lf.write(result.stdout or "")
             lf.write("\n\n=== STDERR ===\n")
             lf.write(result.stderr or "")
 
-        if result.returncode != 0:
-            print(f"[ERROR] Vina 실행 실패 (code={result.returncode}). 로그 파일: {log_file}")
-            print(result.stdout)
-            print(result.stderr)
-            best_score = None
-        else:
-            best_score = parse_vina_score_from_stdout(result.stdout)
-            print(f"[INFO] {complex_pdb.name} Vina best score: {best_score}")
+        best_score = None
+        status = ""
 
-        summary_rows.append([base, best_score, rec_pdbqt.name, lig_pdbqt.name, log_file.name])
+        if result.returncode != 0:
+            # 실행 자체 실패
+            status = f"실패: Vina 실행 에러(code={result.returncode})"
+            if "PDBQT parsing error" in (result.stdout or "") or "PDBQT parsing error" in (result.stderr or ""):
+                status += " (PDBQT parsing error: flex residue/ligand 태그 문제)"
+            print(f"[ERROR] {status}. 로그 파일: {log_file}")
+            print(result.stdout or "")
+            print(result.stderr or "")
+            debug_lines.append(f"{base}\t{status}\tlog={log_file.name}")
+        else:
+            # 실행은 성공 → score 파싱
+            best_score = parse_vina_score_from_stdout(result.stdout or "")
+            if best_score is None:
+                status = "파싱실패: stdout에서 점수 패턴 없음"
+                print(f"[WARN] {complex_pdb.name} Vina 점수 파싱 실패. 로그 파일 확인: {log_file}")
+                debug_lines.append(f"{base}\t{status}\tlog={log_file.name}")
+            else:
+                if best_score == 0.0:
+                    status = "정상(점수=0.0)"
+                else:
+                    status = "정상"
+                print(f"[INFO] {complex_pdb.name} Vina best score: {best_score}")
+                debug_lines.append(f"{base}\t{status}\t{best_score}")
+
+        summary_rows.append([base, best_score, status, rec_pdbqt.name, lig_pdbqt.name, log_file.name])
 
     summary_csv = vina_dir / "vina_summary.csv"
     with open(summary_csv, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerows(summary_rows)
     print(f"\n✅ Vina 요약 저장: {summary_csv}")
+
+    if debug_lines:
+        debug_file = vina_dir / "vina_debug.txt"
+        debug_file.write_text("\n".join(debug_lines), encoding="utf-8")
+        print(f"[INFO] Vina 디버그 로그: {debug_file}")
+
     print("=" * 80)
 
 
@@ -561,8 +630,7 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
 def run_plip_on_rank1(rank1_pdbs, plip_dir: Path):
     """
     PLIP 상호작용 분석.
-    - PLIP_CMD (예: python -m plip.cmd.plip)를 이용해 각 PDB에 대해 분석.
-    - 결과 폴더 이름: complex_0_unrelaxed_... 형태.
+    - 각 complex별 stdout/stderr 를 로그 파일로 저장.
     """
     print("\n" + "=" * 80)
     print("STEP 5: PLIP 상호작용 분석")
@@ -575,13 +643,36 @@ def run_plip_on_rank1(rank1_pdbs, plip_dir: Path):
         return
 
     plip_dir.mkdir(parents=True, exist_ok=True)
+    debug_lines = []
+
     for pdb in rank1_pdbs:
         base = pdb.stem
         out_subdir = plip_dir / base
         out_subdir.mkdir(exist_ok=True)
         cmd = f"{PLIP_CMD} -f {pdb} -o {out_subdir}"
-        run(cmd)
-        print(f"✔️ PLIP 완료: {pdb.name} → {out_subdir}")
+        print(f"[RUN] {cmd}")
+        log_file = out_subdir / f"{base}_plip.log"
+
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+
+        with open(log_file, "w", encoding="utf-8") as lf:
+            lf.write("=== STDOUT ===\n")
+            lf.write(result.stdout or "")
+            lf.write("\n\n=== STDERR ===\n")
+            lf.write(result.stderr or "")
+
+        if result.returncode != 0:
+            print(f"[ERROR] PLIP 실패: {pdb.name} (code={result.returncode}). 로그: {log_file}")
+            print((result.stderr or "")[:300])
+            debug_lines.append(f"{base}\tERROR_returncode_{result.returncode}\tlog={log_file.name}")
+        else:
+            print(f"✔️ PLIP 완료: {pdb.name} → {out_subdir}")
+            debug_lines.append(f"{base}\tOK\tlog={log_file.name}")
+
+    if debug_lines:
+        debug_file = plip_dir / "plip_run_debug.txt"
+        debug_file.write_text("\n".join(debug_lines), encoding="utf-8")
+        print(f"[INFO] PLIP 실행 디버그 로그: {debug_file}")
     print("=" * 80)
 
 
@@ -590,6 +681,16 @@ def run_plip_on_rank1(rank1_pdbs, plip_dir: Path):
 # =====================================================================
 
 def run_prodigy_on_rank1(rank1_pdbs, out_dir: Path) -> pd.DataFrame:
+    """
+    PRODIGY 결합 친화도 평가.
+
+    - prodigy_summary.csv 컬럼:
+        complex, PRODIGY_dG, prodigy_status
+    - prodigy_status 예시:
+        '정상',
+        '실패: PRODIGY 실행 에러(code=...)',
+        '파싱실패: stdout에서 ΔG 패턴 없음'
+    """
     print("\n" + "="*80)
     print("STEP 6: PRODIGY 결합 친화도 평가")
     print("="*80)
@@ -599,34 +700,55 @@ def run_prodigy_on_rank1(rank1_pdbs, out_dir: Path) -> pd.DataFrame:
         print("       예: export PRODIGY_SCRIPT='prodigy'")
         return pd.DataFrame()
 
-    # 예: 체인 A/B를 인터페이스로 잡는 경우
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     records = []
+    debug_lines = []
+
     for pdb_path in rank1_pdbs:
         complex_name = Path(pdb_path).stem
         out_txt = out_dir / f"{complex_name}_prodigy.txt"
+        err_txt = out_dir / f"{complex_name}_prodigy.stderr.txt"
 
         cmd = [
-            *PRODIGY_SCRIPT.split(),   # 기본은 ['prodigy']
+            *PRODIGY_SCRIPT.split(),
             str(pdb_path),
-            "--selection", "A", "B"
+            "--selection", "A", "B",
         ]
         print(f"[RUN] {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True)
 
+        # stdout / stderr 저장
+        out_txt.write_text(result.stdout or "", encoding="utf-8")
+        err_txt.write_text(result.stderr or "", encoding="utf-8")
+
+        dg = None
+        status = ""
+
         if result.returncode != 0:
-            print(f"[WARN] PRODIGY 실패: {complex_name}")
-            print(result.stderr[:300])
-            continue
+            status = f"실패: PRODIGY 실행 에러(code={result.returncode})"
+            print(f"[ERROR] {status}: {complex_name}. 로그: {out_txt.name}, {err_txt.name}")
+            print((result.stderr or "")[:300])
+        else:
+            # stdout에서 ΔG 값 파싱
+            dg = parse_prodigy_dg_from_stdout(result.stdout or "")
+            if dg is None:
+                status = "파싱실패: stdout에서 ΔG 패턴 없음"
+                print(f"[WARN] PRODIGY ΔG 파싱 실패: {complex_name}. (로그: {out_txt.name})")
+            else:
+                status = "정상"
 
-        out_txt.write_text(result.stdout)
+        records.append({
+            "complex": complex_name,
+            "PRODIGY_dG": dg,
+            "prodigy_status": status,
+        })
+        debug_lines.append(f"{complex_name}\t{status}\t{dg}")
 
-        # stdout에서 ΔG 값 파싱 (예: 'Binding affinity: -10.3 kcal/mol' 같은 라인)
-        dg = parse_prodigy_dg_from_stdout(result.stdout)  # 너가 추가했던 헬퍼 함수
-        if dg is not None:
-            records.append({"complex": complex_name, "PRODIGY_dG": dg})
-
-    if not records:
-        return pd.DataFrame()
+    if debug_lines:
+        debug_file = out_dir / "prodigy_debug.txt"
+        debug_file.write_text("\n".join(debug_lines), encoding="utf-8")
+        print(f"[INFO] PRODIGY 디버그 로그: {debug_file}")
 
     df = pd.DataFrame(records)
     df.to_csv(out_dir / "prodigy_summary.csv", index=False)
@@ -658,52 +780,141 @@ def zip_rank1_pdbs(rank1_pdbs, results_dir: Path):
 
 def load_vina_scores(vina_dir: Path):
     """
-    vina_summary.csv 에서 complex별 Vina score 로딩.
+    vina_summary.csv 에서 complex별 Vina score와 상태를 로딩.
+
+    반환:
+      scores   : dict[complex_id] = float 또는 None
+      statuses : dict[complex_id] = 상태 문자열
     """
     scores = {}
+    statuses = {}
+
     summary_csv = vina_dir / "vina_summary.csv"
     if not summary_csv.exists():
         print("[WARN] Vina summary CSV가 존재하지 않습니다:", summary_csv)
-        return scores
+        return scores, statuses
 
-    with open(summary_csv) as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            base = row.get("complex")
-            val = row.get("vina_score")
-            if base is None:
-                continue
-            try:
-                scores[base] = float(val)
-            except (TypeError, ValueError):
-                scores[base] = None
-    return scores
+    try:
+        df = pd.read_csv(summary_csv)
+    except Exception as e:
+        print(f"[WARN] Vina summary CSV 로딩 실패: {e}")
+        return scores, statuses
+
+    if "complex" not in df.columns:
+        print("[WARN] Vina summary CSV에 'complex' 컬럼이 없습니다.")
+        return scores, statuses
+
+    has_status = "vina_status" in df.columns
+
+    for _, row in df.iterrows():
+        base = row.get("complex")
+        if isinstance(base, float) and pd.isna(base):
+            continue
+        base = str(base).strip()
+        if not base:
+            continue
+
+        val = row.get("vina_score")
+        try:
+            scores[base] = float(val)
+        except (TypeError, ValueError):
+            scores[base] = None
+
+        if has_status:
+            s = row.get("vina_status")
+            statuses[base] = "" if pd.isna(s) else str(s)
+        else:
+            # 구버전 summary에는 상태가 없으므로 점수 유무로만 대략 추정
+            statuses[base] = "정상" if scores[base] is not None else "미기록"
+
+    print(f"[INFO] Vina 점수를 읽어온 구조 수: {len(scores)}")
+    return scores, statuses
 
 
 def load_prodigy_scores(prodigy_dir: Path):
     """
-    PRODIGY 출력 텍스트(*_prodigy.txt)에서 ΔG(kcal/mol) 값을 추정.
+    PRODIGY 결과 로딩.
+
+    우선순위:
+      1) prodigy_summary.csv (있다면)
+      2) 없으면 *_prodigy.txt 백업 파싱
+
+    반환:
+      scores   : dict[complex_id] = float 또는 None
+      statuses : dict[complex_id] = 상태 문자열
     """
     scores = {}
-    if not prodigy_dir.exists():
-        return scores
+    statuses = {}
 
+    if not prodigy_dir.exists():
+        return scores, statuses
+
+    summary_csv = prodigy_dir / "prodigy_summary.csv"
+    if summary_csv.exists():
+        try:
+            df = pd.read_csv(summary_csv)
+            if "complex" in df.columns:
+                # 값 컬럼 찾기 (prodigy_dg, PRODGIGY_dG 등)
+                val_col = None
+                for c in df.columns:
+                    cl = c.lower()
+                    if cl.startswith("prodigy") and "status" not in cl:
+                        val_col = c
+                        break
+                has_status = "prodigy_status" in df.columns
+
+                for _, row in df.iterrows():
+                    comp = row.get("complex")
+                    if isinstance(comp, float) and pd.isna(comp):
+                        continue
+                    comp = str(comp).strip()
+                    if not comp:
+                        continue
+
+                    val = row.get(val_col) if val_col is not None else None
+                    try:
+                        scores[comp] = float(val)
+                    except (TypeError, ValueError):
+                        scores[comp] = None
+
+                    if has_status:
+                        s = row.get("prodigy_status")
+                        statuses[comp] = "" if pd.isna(s) else str(s)
+                    else:
+                        statuses[comp] = "정상" if scores[comp] is not None else "미기록"
+
+            print(f"[INFO] PRODIGY ΔG를 요약 파일에서 불러옴: {len(scores)}개 구조")
+        except Exception as e:
+            print(f"[WARN] prodigy_summary.csv 로딩 실패: {e}")
+
+    # summary에서 뭔가 읽어왔다면 그대로 사용
+    if scores or statuses:
+        return scores, statuses
+
+    # 백업: *_prodigy.txt 직접 파싱
     for txt in prodigy_dir.glob("*_prodigy.txt"):
         base = txt.stem.replace("_prodigy", "")
         try:
-            with open(txt) as f:
-                text = f.read()
+            text = txt.read_text()
         except Exception:
             continue
 
         vals = []
         for m in re.finditer(r"[-+]?\d+\.\d+", text):
             v = float(m.group(0))
+            # PRODIGY ΔG 대략적인 범위
             if -50.0 <= v <= 0.0:
                 vals.append(v)
-        scores[base] = min(vals) if vals else None
 
-    return scores
+        if vals:
+            scores[base] = min(vals)
+            statuses[base] = "텍스트 파싱(백업)"
+        else:
+            scores[base] = None
+            statuses[base] = "파싱실패: *_prodigy.txt에서 ΔG 후보값 없음"
+
+    print(f"[INFO] PRODIGY ΔG를 텍스트에서 직접 파싱: {len(scores)}개 구조")
+    return scores, statuses
 
 
 def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs):
@@ -779,50 +990,137 @@ def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs):
 
 def load_plip_scores(plip_dir: Path):
     """
-    PLIP 결과 폴더들에서 간단한 상호작용 스코어 추출.
-    - 각 complex별 report.txt에서 Hydrogen bonds / Hydrophobic / Salt bridges 숫자를 추정.
+    PLIP 결과 폴더들에서 상호작용 스코어 + 상태를 추출.
+
+    - 각 complex별 서브폴더 이름이 complex_0_unrelaxed_... 형태라고 가정.
+    - 우선 report.xml, 없으면 report.txt를 사용.
+    - 아무 것도 없으면 plip_status에 이유를 기록하고 상호작용 수는 None으로 둔다.
+
+    반환:
+      metrics  : dict[base] = {
+                    "total": total or None,
+                    "hbond": ...,
+                    "hydrophobic": ...,
+                    "saltbridge": ...
+                }
+      statuses : dict[base] = 상태 문자열
     """
-    scores = {}
+    metrics = {}
+    statuses = {}
+
     if not plip_dir.exists():
-        return scores
+        return metrics, statuses
+
+    debug_lines = []
 
     for subdir in plip_dir.iterdir():
         if not subdir.is_dir():
             continue
+
         base = subdir.name
-        report = subdir / "report.txt"
-        if not report.exists():
-            continue
+        xml_path = subdir / "report.xml"
+        txt_report = subdir / "report.txt"
 
-        try:
-            with open(report) as f:
-                text = f.read()
-        except Exception:
-            continue
+        hbond = 0
+        hydrophobic = 0
+        saltbridge = 0
+        total = None
 
-        hbond = hydrophobic = saltbridge = 0
-        for line in text.splitlines():
-            lower = line.lower()
-            nums = re.findall(r"\b\d+\b", line)
-            if not nums:
-                continue
-            last_num = int(nums[-1])
-            if "hydrogen bond" in lower:
-                hbond = last_num
-            elif "hydrophobic" in lower:
-                hydrophobic = last_num
-            elif "salt bridge" in lower:
-                saltbridge = last_num
+        source = None
+        status = ""
 
-        total = hbond + hydrophobic + saltbridge
-        scores[base] = {
-            "total": total,
-            "hbond": hbond,
-            "hydrophobic": hydrophobic,
-            "saltbridge": saltbridge,
-        }
+        # 1) report.xml 우선
+        if xml_path.exists():
+            try:
+                tree = ET.parse(xml_path)
+                root = tree.getroot()
+                hbond = sum(1 for _ in root.iter("hydrogen_bond"))
+                hydrophobic = sum(1 for _ in root.iter("hydrophobic_interaction"))
+                saltbridge = sum(1 for _ in root.iter("salt_bridge"))
+                total = hbond + hydrophobic + saltbridge
+                source = "xml"
+                status = "정상(xml)"
+            except Exception as e:
+                status = f"실패: report.xml 파싱 에러({e})"
+                debug_lines.append(f"{base}\treport_xml_parse_error\t{e}")
 
-    return scores
+        # 2) report.txt 백업
+        if source is None and txt_report.exists():
+            try:
+                text = txt_report.read_text()
+                for line in text.splitlines():
+                    lower = line.lower()
+                    nums = re.findall(r"\b\d+\b", line)
+                    if not nums:
+                        continue
+                    last_num = int(nums[-1])
+                    if "hydrogen bond" in lower:
+                        hbond = last_num
+                    elif "hydrophobic" in lower:
+                        hydrophobic = last_num
+                    elif "salt bridge" in lower:
+                        saltbridge = last_num
+                total = hbond + hydrophobic + saltbridge
+                source = "report.txt"
+                status = "정상(report.txt)"
+            except Exception as e:
+                status = f"실패: report.txt 파싱 에러({e})"
+                debug_lines.append(f"{base}\treport_txt_parse_error\t{e}")
+
+        # 3) 둘 다 없으면 → 실패 처리
+        if source is None and not status:
+            status = "실패: report.xml/report.txt 없음 (PLIP 출력에 상호작용 요약 파일이 없음)"
+
+        # total이 없거나 실패 상태면 세부값을 None으로
+        if total is None or status.startswith("실패"):
+            metrics[base] = {
+                "total": None,
+                "hbond": None,
+                "hydrophobic": None,
+                "saltbridge": None,
+            }
+        else:
+            metrics[base] = {
+                "total": total,
+                "hbond": hbond,
+                "hydrophobic": hydrophobic,
+                "saltbridge": saltbridge,
+            }
+
+        statuses[base] = status
+        debug_lines.append(
+            f"{base}\t{status}\t"
+            f"total={metrics[base]['total']}\t"
+            f"hbond={metrics[base]['hbond']}\t"
+            f"hydrophobic={metrics[base]['hydrophobic']}\t"
+            f"saltbridge={metrics[base]['saltbridge']}"
+        )
+
+    # 디버그 로그
+    if debug_lines:
+        debug_file = plip_dir / "plip_parse_debug.txt"
+        debug_file.write_text("\n".join(debug_lines), encoding="utf-8")
+        print(f"[INFO] PLIP 파싱 디버그 로그: {debug_file}")
+
+    # 요약 CSV (각 complex별 한 줄)
+    summary_rows = []
+    for base, m in metrics.items():
+        summary_rows.append({
+            "complex": base,
+            "plip_total_interactions": m["total"],
+            "plip_hbond": m["hbond"],
+            "plip_hydrophobic": m["hydrophobic"],
+            "plip_saltbridge": m["saltbridge"],
+            "plip_status": statuses.get(base, ""),
+        })
+
+    if summary_rows:
+        df = pd.DataFrame(summary_rows)
+        df.to_csv(plip_dir / "plip_summary.csv", index=False)
+        print(f"[INFO] PLIP 요약 CSV 저장: {plip_dir / 'plip_summary.csv'}")
+
+    print(f"[INFO] PLIP 상호작용을 읽어온 구조 수: {len(metrics)}")
+    return metrics, statuses
 
 
 def minmax_norm(value_dict, higher_is_better=True):
@@ -861,6 +1159,10 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
       Vina    0.20  (에너지, 더 작을수록 좋음)
       PLIP    0.25  (총 상호작용 수, 많을수록 좋음)
       ipTM    0.20  (인터페이스 신뢰도, 높을수록 좋음)
+
+    추가:
+      - 각 평가 모델별 status 컬럼을 엑셀에 함께 기록
+        (vina_status, prodigy_status, plip_status)
     """
     results_dir     = folders["results"]
     colabfold_out   = folders["colabfold_out"]
@@ -868,24 +1170,28 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
     plip_dir        = folders["plip"]
     prodigy_dir     = folders["prodigy"]
 
-    vina_vals    = load_vina_scores(vina_dir)
-    prodigy_vals = load_prodigy_scores(prodigy_dir)
-    iptm_vals    = load_iptm_scores(colabfold_out, rank1_pdbs)
-    plip_metrics = load_plip_scores(plip_dir)
+    # 각 평가 지표 + 상태 불러오기
+    vina_vals, vina_status         = load_vina_scores(vina_dir)
+    prodigy_vals, prodigy_status   = load_prodigy_scores(prodigy_dir)
+    iptm_vals                      = load_iptm_scores(colabfold_out, rank1_pdbs)
+    plip_metrics, plip_status      = load_plip_scores(plip_dir)
 
-    plip_total_vals = {b: d["total"] for b, d in plip_metrics.items()}
+    # PLIP total 값만 따로 dict로 추출
+    plip_total_vals = {b: d.get("total") for b, d in plip_metrics.items()}
 
+    # 0~1 정규화
     iptm_norm    = minmax_norm(iptm_vals, higher_is_better=True)
     vina_norm    = minmax_norm(vina_vals, higher_is_better=False)
     prodigy_norm = minmax_norm(prodigy_vals, higher_is_better=False)
     plip_norm    = minmax_norm(plip_total_vals, higher_is_better=True)
 
+    # candidate_id → peptide 매핑 (complex_0, complex_1 ...)
     id_to_pep = {f"complex_{i}": pep for i, pep in enumerate(peptides)}
 
     rows = []
     for pdb_path in rank1_pdbs:
-        base = pdb_path.stem
-        candidate_id = base.split("_unrelaxed")[0]  # complex_0
+        base = pdb_path.stem                                       # complex_0_unrelaxed_...
+        candidate_id = base.split("_unrelaxed")[0]                  # complex_0
         pep_seq = id_to_pep.get(candidate_id, "")
 
         vina    = vina_vals.get(base)
@@ -898,11 +1204,13 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
         plip_hphob  = plip_data.get("hydrophobic")
         plip_salt   = plip_data.get("saltbridge")
 
+        # 가중치
         w_prodigy = 0.35
         w_vina    = 0.20
         w_plip    = 0.25
         w_iptm    = 0.20
 
+        # 정규화된 점수 조합
         final_score = (
             w_prodigy * prodigy_norm.get(base, 0.0) +
             w_vina    * vina_norm.get(base, 0.0) +
@@ -911,21 +1219,29 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
         )
 
         rows.append({
-            "candidate_id": candidate_id,
-            "peptide_seq":  pep_seq,
-            "complex_pdb":  pdb_path.name,
-            "final_score":  final_score,
-            "prodigy_dG":   prodigy,
-            "vina_score":   vina,
-            "plip_total":   plip_total,
-            "plip_hbond":   plip_hbond,
-            "plip_hphob":   plip_hphob,
-            "plip_salt":    plip_salt,
-            "iptm":         iptm,
+            "candidate_id":     candidate_id,
+            "peptide_seq":      pep_seq,
+            "complex_pdb":      pdb_path.name,
+            "final_score":      final_score,
+            "prodigy_dG":       prodigy,
+            "prodigy_status":   prodigy_status.get(base, "미기록"),
+            "vina_score":       vina,
+            "vina_status":      vina_status.get(base, "미기록"),
+            "plip_total":       plip_total,
+            "plip_hbond":       plip_hbond,
+            "plip_hphob":       plip_hphob,
+            "plip_salt":        plip_salt,
+            "plip_status":      plip_status.get(base, "미기록"),
+            "iptm":             iptm,
         })
 
-    rows.sort(key=lambda r: (r["final_score"] if r["final_score"] is not None else -1e9), reverse=True)
+    # FinalScore_A 기준으로 내림차순 정렬
+    rows.sort(
+        key=lambda r: (r["final_score"] if r["final_score"] is not None else -1e9),
+        reverse=True,
+    )
 
+    # 엑셀 작성
     wb = Workbook()
     ws = wb.active
     ws.title = "pepbind_ranking_A"
@@ -937,11 +1253,14 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
         "complex_pdb",
         "FinalScore_A",
         "PRODIGY_dG(kcal/mol)",
+        "PRODIGY_status",
         "Vina_score(kcal/mol)",
+        "Vina_status",
         "PLIP_total_interactions",
         "PLIP_hbond",
         "PLIP_hydrophobic",
         "PLIP_saltbridge",
+        "PLIP_status",
         "ipTM",
     ]
     ws.append(headers)
@@ -954,11 +1273,14 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
             r["complex_pdb"],
             round(r["final_score"], 4) if r["final_score"] is not None else None,
             r["prodigy_dG"],
+            r["prodigy_status"],
             r["vina_score"],
+            r["vina_status"],
             r["plip_total"],
             r["plip_hbond"],
             r["plip_hphob"],
             r["plip_salt"],
+            r["plip_status"],
             r["iptm"],
         ])
 
