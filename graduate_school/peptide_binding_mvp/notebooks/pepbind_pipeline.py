@@ -32,11 +32,14 @@ from datetime import datetime
 import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModelForMaskedLM
-from Bio.PDB import PDBParser, PDBIO, Select
+from Bio.PDB import PDBParser
+# from Bio.PDB import PDBIO, Select
 from openpyxl import Workbook
 import pandas as pd
+import numpy as np
 
 import xml.etree.ElementTree as ET
+from collections import defaultdict
 
 START_TIME = datetime.now()
 
@@ -68,6 +71,7 @@ VINA_CMD        = os.environ.get("VINA_CMD", "vina").strip()
 PLIP_CMD        = os.environ.get("PLIP_CMD", "plip").strip()          # 기본값도 plip으로
 PRODIGY_SCRIPT  = os.environ.get("PRODIGY_SCRIPT", "prodigy").strip()
 
+OBABEL_CMD = shutil.which("obabel") or "obabel"
 
 # =====================================================================
 # === 공통 설정 / 유틸 =================================================
@@ -162,6 +166,32 @@ def parse_prodigy_dg_from_stdout(stdout: str):
             return None
 
     return None
+
+
+def extract_chain_as_pdb(complex_pdb: Path, chain_id: str, out_pdb: Path):
+    """
+    complex_pdb에서 특정 chain_id(A/B 등) 전체를 골라
+    하나의 PDB 파일로 저장.
+    ATOM, HETATM만 대상.
+    """
+    lines_out = []
+    with open(complex_pdb, "r") as f:
+        for line in f:
+            if not (line.startswith("ATOM") or line.startswith("HETATM")):
+                continue
+            if len(line) < 22:
+                continue
+            if line[21] == chain_id:
+                lines_out.append(line.rstrip("\n"))
+
+    if not lines_out:
+        raise ValueError(f"{complex_pdb}에서 체인 {chain_id} 원자를 찾지 못했습니다.")
+
+    with open(out_pdb, "w") as f:
+        for ln in lines_out:
+            f.write(ln + "\n")
+        f.write(f"TER\n")
+        f.write("END\n")
 
 
 # =====================================================================
@@ -373,12 +403,12 @@ def run_colabfold_batch_with_progress(csv_path: Path, out_dir: Path, total_compl
 # === STEP 4: AutoDock Vina 도킹 =====================================
 # =====================================================================
 
-class ChainSelect(Select):
-    def __init__(self, chain_id):
-        self.chain_id = chain_id
+# class ChainSelect(Select):
+#     def __init__(self, chain_id):
+#         self.chain_id = chain_id
 
-    def accept_chain(self, chain):
-        return chain.get_id() == self.chain_id
+#     def accept_chain(self, chain):
+#         return chain.get_id() == self.chain_id
 
 
 def split_complex_to_receptor_ligand(
@@ -388,22 +418,19 @@ def split_complex_to_receptor_ligand(
     ligand_chain: str = "B",
 ):
     """
-    간단 가정:
-    - ColabFold 멀티머 출력에서 체인 A: 타깃 단백질
-    - 체인 B: 펩타이드
+    ColabFold 멀티머 출력 PDB에서 지정한 체인 전체를 그대로 잘라
+    receptor/ligand PDB를 만든다.
+    - receptor_chain: 보통 A (타깃 단백질)
+    - ligand_chain  : 보통 B (펩타이드 전체)
     """
-    parser = PDBParser(QUIET=True)
-    structure = parser.get_structure("complex", str(complex_pdb))
-    model = next(structure.get_models())
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    io = PDBIO()
     rec_pdb = out_dir / f"{complex_pdb.stem}_receptor_{receptor_chain}.pdb"
     lig_pdb = out_dir / f"{complex_pdb.stem}_ligand_{ligand_chain}.pdb"
 
-    io.set_structure(model)
-    io.save(str(rec_pdb), ChainSelect(receptor_chain))
-    io.set_structure(model)
-    io.save(str(lig_pdb), ChainSelect(ligand_chain))
+    # 여기서 체인 전체를 그대로 사용
+    extract_chain_as_pdb(complex_pdb, receptor_chain, rec_pdb)
+    extract_chain_as_pdb(complex_pdb, ligand_chain, lig_pdb)
 
     return rec_pdb, lig_pdb
 
@@ -422,7 +449,6 @@ def compute_box_from_ligand(lig_pdb: Path, padding: float = 10.0):
     if not coords:
         raise ValueError(f"리간드 PDB에서 원자 좌표를 찾지 못했습니다: {lig_pdb}")
 
-    import numpy as np
     coords = np.array(coords)
     center = coords.mean(axis=0)
     minc = coords.min(axis=0)
@@ -440,28 +466,147 @@ def compute_box_from_ligand(lig_pdb: Path, padding: float = 10.0):
     return box
 
 
-def prepare_pdbqt(rec_pdb: Path, lig_pdb: Path, out_dir: Path):
+def merge_ligand_roots(raw_pdbqt_path: str, out_pdbqt_path: str) -> None:
     """
-    PDB → PDBQT 변환.
-    1) AutoDockTools 스크립트(prepare_receptor4.py, prepare_ligand4.py)가 있으면 그것 사용
-    2) 없으면 obabel 사용
+    obabel이 만든 리간드 PDBQT(여러 ROOT/BRANCH 포함 가능)를
+    Vina 1.2.x가 잘 읽을 수 있는 형태의
+    단일 ROOT + TORSDOF 블록으로 변환한다.
+
+    - REMARK 라인들은 그대로 유지
+    - 모든 ATOM/HETATM 좌표를 하나의 ROOT/ENDROOT 안에 넣음
+    - TORSDOF는 0(완전 rigid ligand)로 고정
+    - !!! END 라인은 쓰지 않는다 (Vina 1.2.x에서 에러 남)
+    """
+
+    lines = Path(raw_pdbqt_path).read_text().splitlines()
+
+    header_lines = []
+    atom_lines = []
+
+    # obabel이 계산한 torsdof 값은 참고만 하고 실제로는 0으로 rigid 처리
+    orig_torsdof = None
+
+    for line in lines:
+        if not line.strip():
+            continue
+
+        tag = line[:6].strip()
+
+        if tag == "REMARK":
+            header_lines.append(line)
+        elif tag in ("ATOM", "HETATM"):
+            atom_lines.append(line)
+        elif tag == "TORSDOF":
+            # "TORSDOF 15" 이런 형태라서 뽑을 수는 있지만,
+            # 여기서는 rigid ligand로 만들 거라 실제 값은 쓰지 않음.
+            try:
+                orig_torsdof = int(line.split()[1])
+            except Exception:
+                pass
+        # BRANCH / ENDBRANCH / ROOT / ENDROOT / END 등은 전부 버림
+
+    if not atom_lines:
+        raise ValueError(f"No ATOM/HETATM lines found in ligand PDBQT: {raw_pdbqt_path}")
+
+    out_lines = []
+    out_lines.extend(header_lines)
+    out_lines.append("ROOT")
+    out_lines.extend(atom_lines)
+    out_lines.append("ENDROOT")
+    # 리간드 rigid 처리
+    out_lines.append("TORSDOF 0")
+
+    # 여기에서 절대 "END" 를 추가하지 않는다!
+    Path(out_pdbqt_path).write_text("\n".join(out_lines) + "\n")
+
+
+def sanitize_receptor_pdbqt(rec_pdbqt: Path):
+    """
+    리셉터 PDBQT에서 Vina가 싫어할 만한 태그들을 제거하고
+    REMARK / ATOM / HETATM / END 정도만 남긴다.
+
+    - ROOT, ENDROOT, BRANCH, ENDBRANCH, TORSDOF, CONECT, MODEL, ENDMDL 등은 모두 제거.
+    """
+    if not rec_pdbqt.exists():
+        print(f"[WARN] sanitize_receptor_pdbqt: 파일 없음: {rec_pdbqt}")
+        return
+
+    lines_in = rec_pdbqt.read_text().splitlines()
+    out_lines = []
+
+    for line in lines_in:
+        s = line.strip()
+        if not s:
+            # 빈 줄은 그냥 버리자
+            continue
+
+        # 리셉터에선 필요 없는 태그들 싹 제거
+        if s.startswith(("ROOT", "ENDROOT", "BRANCH", "ENDBRANCH", "TORSDOF",
+                         "CONECT", "MODEL", "ENDMDL")):
+            continue
+
+        # REMARK / ATOM / HETATM / END 만 허용
+        if s.startswith(("REMARK", "ATOM", "HETATM", "END")):
+            out_lines.append(s)
+            continue
+
+        # 그 외 태그는 전부 버림
+        continue
+
+    rec_pdbqt.write_text("\n".join(out_lines) + "\n")
+
+
+def prepare_pdbqt(rec_pdb: Path, lig_pdb: Path, out_dir: Path) -> tuple[Path, Path]:
+    """
+    - receptor: obabel -xr 로 PDBQT 생성 후, 혹시 모를 ROOT/BRANCH 태그는 제거
+    - ligand  : obabel로 임시 PDBQT 생성 → merge_ligand_roots 로 단일 ROOT rigid ligand 구성
     """
     out_dir.mkdir(parents=True, exist_ok=True)
+
     rec_pdbqt = out_dir / f"{rec_pdb.stem}.pdbqt"
+    lig_raw_pdbqt = out_dir / f"{lig_pdb.stem}_raw.pdbqt"
     lig_pdbqt = out_dir / f"{lig_pdb.stem}.pdbqt"
 
-    prep_rec = shutil.which("prepare_receptor4.py")
-    prep_lig = shutil.which("prepare_ligand4.py")
-    obabel   = shutil.which("obabel")
+    # 1) receptor PDBQT (rigid)
+    rec_cmd = [
+        OBABEL_CMD,
+        "-ipdb", str(rec_pdb),
+        "-xr",                    # receptor 모드
+        "-opdbqt",
+        "-O", str(rec_pdbqt),
+    ]
+    print("[RUN]", " ".join(rec_cmd))
+    rec_res = subprocess.run(rec_cmd, capture_output=True, text=True)
+    if rec_res.returncode != 0:
+        print(rec_res.stdout)
+        print(rec_res.stderr)
+        raise RuntimeError(f"receptor PDBQT 변환 실패: code={rec_res.returncode}")
 
-    if prep_rec and prep_lig:
-        run(f"{prep_rec} -r {rec_pdb} -o {rec_pdbqt} -A hydrogens")
-        run(f"{prep_lig} -l {lig_pdb} -o {lig_pdbqt} -A hydrogens")
-    elif obabel:
-        run(f"{obabel} -ipdb {rec_pdb} -xr -opdbqt -O {rec_pdbqt}")
-        run(f"{obabel} -ipdb {lig_pdb}      -opdbqt -O {lig_pdbqt}")
-    else:
-        raise RuntimeError("PDBQT 변환 도구(prepare_* 또는 obabel)를 찾을 수 없습니다.")
+    # 안전하게 ROOT/BRANCH 등 제거
+    sanitize_receptor_pdbqt(rec_pdbqt)
+
+    # 2) ligand PDBQT (obabel → 단일 ROOT rigid ligand)
+    lig_cmd = [
+        OBABEL_CMD,
+        "-ipdb", str(lig_pdb),
+        "-opdbqt",
+        "-O", str(lig_raw_pdbqt),
+    ]
+    print("[RUN]", " ".join(lig_cmd))
+    lig_res = subprocess.run(lig_cmd, capture_output=True, text=True)
+    if lig_res.returncode != 0:
+        print(lig_res.stdout)
+        print(lig_res.stderr)
+        raise RuntimeError(f"ligand PDBQT 변환 실패: code={lig_res.returncode}")
+
+    # 여러 ROOT/모델을 하나의 rigid ligand로 합치기
+    merge_ligand_roots(lig_raw_pdbqt, lig_pdbqt)
+
+    # 원본 임시 파일은 필요 없으면 삭제해도 됨
+    try:
+        lig_raw_pdbqt.unlink()
+    except OSError:
+        pass
 
     return rec_pdbqt, lig_pdbqt
 
@@ -511,6 +656,56 @@ def parse_vina_score_from_stdout(stdout: str):
     return None
 
 
+def get_chain_residue_counts(pdb_path: Path):
+    """
+    PDB 파일에서 체인별 residue 개수를 세어 반환.
+    - key: 체인 ID (문자)
+    - value: 해당 체인의 고유 residue 개수
+    """
+    chain_res = defaultdict(set)
+    with open(pdb_path, "r") as f:
+        for line in f:
+            if not (line.startswith("ATOM") or line.startswith("HETATM")):
+                continue
+            if len(line) < 26:
+                continue
+            chain_id = line[21].strip() or "_"
+            res_seq = line[22:26].strip()
+            if not res_seq:
+                continue
+            chain_res[chain_id].add(res_seq)
+    return {cid: len(res) for cid, res in chain_res.items()}
+
+
+def auto_assign_receptor_ligand(chain_counts: dict, prefer_receptor: str = "A"):
+    """
+    체인별 residue 개수를 바탕으로 receptor/ligand 체인을 추정.
+    - prefer_receptor 가 chain_counts에 있으면 → 그 체인을 receptor로 확정
+      ligand는 나머지 체인 중 residue 개수가 가장 적은 체인
+    - prefer_receptor가 없으면 → residue 개수가 가장 많은 체인을 receptor,
+      가장 적은 체인을 ligand로 선택
+    - 체인이 1개뿐이면 (receptor, None) 반환
+    """
+    chains = list(chain_counts.keys())
+    if not chains:
+        return None, None
+    if len(chains) == 1:
+        # 단일체 구조 → ligand 없음
+        return chains[0], None
+
+    if prefer_receptor in chain_counts:
+        receptor = prefer_receptor
+        others = [c for c in chains if c != receptor]
+        ligand = min(others, key=lambda c: chain_counts[c])
+    else:
+        # 가장 큰 체인을 receptor, 가장 작은 체인을 ligand 로
+        receptor = max(chains, key=lambda c: chain_counts[c])
+        others = [c for c in chains if c != receptor]
+        ligand = min(others, key=lambda c: chain_counts[c])
+
+    return receptor, ligand
+
+
 def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
     """
     AutoDock Vina 도킹 실행 + 요약/상태 로그 기록.
@@ -521,7 +716,10 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
         '정상', '정상(점수=0.0)',
         '실패: Vina 실행 에러(code=...)',
         '실패: Vina 실행 에러(code=...)(PDBQT parsing error: ...)',
-        '파싱실패: stdout에서 점수 패턴 없음'
+        '파싱실패: stdout에서 점수 패턴 없음',
+        '스킵: 단일체 구조(리간드 체인 없음)',
+        '스킵: 리간드 체인 자동 탐지 실패',
+        '스킵: 체인 분리 실패(...)'
     """
     print("\n" + "=" * 80)
     print("STEP 4: AutoDock Vina 도킹")
@@ -543,19 +741,67 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
         complex_out_dir = vina_dir / base
         complex_out_dir.mkdir(parents=True, exist_ok=True)
 
-        print(f"\n[INFO] Vina 준비: {complex_pdb.name}")
-        rec_pdb, lig_pdb = split_complex_to_receptor_ligand(
-            complex_pdb,
-            complex_out_dir,
-            receptor_chain="A",
-            ligand_chain="B",
-        )
+        log_file = complex_out_dir / f"{base}_vina_stdout.txt"
 
+        print(f"\n[INFO] Vina 준비: {complex_pdb.name}")
+
+        # 1) PDB 체인 구성 분석
+        chain_counts = get_chain_residue_counts(complex_pdb)
+        print(f"[INFO] {complex_pdb.name} 체인 구성: {chain_counts}")
+
+        if not chain_counts:
+            status = "스킵: 체인 정보 없음(ATOM/HETATM 레코드 없음)"
+            print(f"[WARN] {status}")
+            log_file.write_text(status + "\n", encoding="utf-8")
+            summary_rows.append([base, None, status, "", "", log_file.name])
+            debug_lines.append(f"{base}\t{status}\tlog={log_file.name}")
+            continue
+
+        # 체인 수가 1개면 Vina 도킹 불가 → 스킵
+        if len(chain_counts) == 1:
+            status = "스킵: 단일체 구조(리간드 체인 없음)"
+            print(f"[WARN] {complex_pdb.name} {status}")
+            msg = f"{status}\nchains={chain_counts}\n"
+            log_file.write_text(msg, encoding="utf-8")
+            summary_rows.append([base, None, status, "", "", log_file.name])
+            debug_lines.append(f"{base}\t{status}\tlog={log_file.name}")
+            continue
+
+        # 2) receptor / ligand 체인 자동 결정
+        rec_chain, lig_chain = auto_assign_receptor_ligand(chain_counts, prefer_receptor="A")
+        if rec_chain is None or lig_chain is None:
+            status = "스킵: 리간드 체인 자동 탐지 실패"
+            print(f"[WARN] {complex_pdb.name} {status}")
+            msg = f"{status}\nchains={chain_counts}\n"
+            log_file.write_text(msg, encoding="utf-8")
+            summary_rows.append([base, None, status, "", "", log_file.name])
+            debug_lines.append(f"{base}\t{status}\tlog={log_file.name}")
+            continue
+
+        print(f"[INFO] 자동 할당 체인: receptor={rec_chain}, ligand={lig_chain}")
+
+        # 3) 체인 분리 (예전에는 A/B로 고정이어서 여기서 ValueError가 터졌던 부분)
+        try:
+            rec_pdb, lig_pdb = split_complex_to_receptor_ligand(
+                complex_pdb,
+                complex_out_dir,
+                receptor_chain=rec_chain,
+                ligand_chain=lig_chain,
+            )
+        except ValueError as e:
+            status = f"스킵: 체인 분리 실패({e})"
+            print(f"[WARN] {complex_pdb.name} {status}")
+            log_msg = f"{status}\nchains={chain_counts}\n"
+            log_file.write_text(log_msg, encoding="utf-8")
+            summary_rows.append([base, None, status, "", "", log_file.name])
+            debug_lines.append(f"{base}\t{status}\tlog={log_file.name}")
+            continue
+
+        # 4) PDBQT 준비
         rec_pdbqt, lig_pdbqt = prepare_pdbqt(rec_pdb, lig_pdb, complex_out_dir)
         box = compute_box_from_ligand(lig_pdb)
 
         out_pdbqt = complex_out_dir / f"{base}_vina_out.pdbqt"
-        log_file  = complex_out_dir / f"{base}_vina_stdout.txt"
 
         vina_cmd = (
             f"{VINA_CMD} "
@@ -588,6 +834,21 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
             status = f"실패: Vina 실행 에러(code={result.returncode})"
             if "PDBQT parsing error" in (result.stdout or "") or "PDBQT parsing error" in (result.stderr or ""):
                 status += " (PDBQT parsing error: flex residue/ligand 태그 문제)"
+
+                # 디버그: ligand PDBQT 안에 어떤 태그들이 있는지 확인
+                try:
+                    tags = set()
+                    with open(lig_pdbqt, "r") as lf:
+                        for ln in lf:
+                            t = ln.strip()
+                            if not t:
+                                continue
+                            first = t.split()[0]
+                            tags.add(first)
+                    print(f"[DEBUG] {base} ligand_pdbqt 태그 목록:", sorted(tags))
+                except Exception as e:
+                    print(f"[DEBUG] {base} ligand_pdbqt 태그 읽기 실패: {e}")
+
             print(f"[ERROR] {status}. 로그 파일: {log_file}")
             print(result.stdout or "")
             print(result.stderr or "")
@@ -610,10 +871,20 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
         summary_rows.append([base, best_score, status, rec_pdbqt.name, lig_pdbqt.name, log_file.name])
 
     summary_csv = vina_dir / "vina_summary.csv"
-    with open(summary_csv, "w", newline="") as f:
+    with open(summary_csv, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
         writer.writerows(summary_rows)
-    print(f"\n✅ Vina 요약 저장: {summary_csv}")
+    print(f"\n[INFO] Vina 요약 csv 저장: {summary_csv}")
+
+    # 엑셀 요약도 추가
+    try:
+        # 첫 행은 헤더, 나머지는 데이터
+        df_vina = pd.DataFrame(summary_rows[1:], columns=summary_rows[0])
+        xlsx_path = vina_dir / "vina_summary.xlsx"
+        df_vina.to_excel(xlsx_path, index=False)
+        print(f"[INFO] Vina 요약 엑셀 저장: {xlsx_path}")
+    except Exception as e:
+        print(f"[WARN] Vina 요약 엑셀 저장 실패: {e}")
 
     if debug_lines:
         debug_file = vina_dir / "vina_debug.txt"
@@ -672,7 +943,14 @@ def run_plip_on_rank1(rank1_pdbs, plip_dir: Path):
     if debug_lines:
         debug_file = plip_dir / "plip_run_debug.txt"
         debug_file.write_text("\n".join(debug_lines), encoding="utf-8")
-        print(f"[INFO] PLIP 실행 디버그 로그: {debug_file}")
+        print(f"\n[INFO] PLIP 실행 디버그 로그: {debug_file}")
+
+    # PLIP 결과 요약 파일(plip_summary.csv / .xlsx) 생성
+    try:
+        load_plip_scores(plip_dir)
+    except Exception as e:
+        print(f"[WARN] PLIP 요약 생성(load_plip_scores) 중 오류: {e}")
+
     print("=" * 80)
 
 
@@ -751,9 +1029,20 @@ def run_prodigy_on_rank1(rank1_pdbs, out_dir: Path) -> pd.DataFrame:
         print(f"[INFO] PRODIGY 디버그 로그: {debug_file}")
 
     df = pd.DataFrame(records)
-    df.to_csv(out_dir / "prodigy_summary.csv", index=False)
-    print(f"✅ PRODIGY 요약 저장: {out_dir / 'prodigy_summary.csv'}")
+
+    csv_path = out_dir / "prodigy_summary.csv"
+    df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    print(f"✅ PRODIGY 요약 저장: {csv_path}")
+
+    try:
+        xlsx_path = out_dir / "prodigy_summary.xlsx"
+        df.to_excel(xlsx_path, index=False)
+        print(f"[INFO] PRODIGY 요약 엑셀 저장: {xlsx_path}")
+    except Exception as e:
+        print(f"[WARN] PRODIGY 요약 엑셀 저장 실패: {e}")
+
     return df
+
 
 
 # =====================================================================
@@ -1116,11 +1405,22 @@ def load_plip_scores(plip_dir: Path):
 
     if summary_rows:
         df = pd.DataFrame(summary_rows)
-        df.to_csv(plip_dir / "plip_summary.csv", index=False)
-        print(f"[INFO] PLIP 요약 CSV 저장: {plip_dir / 'plip_summary.csv'}")
+        csv_path = plip_dir / "plip_summary.csv"
+        xlsx_path = plip_dir / "plip_summary.xlsx"
+
+        # 엑셀에서 한글 안 깨지게 utf-8-sig 로 저장
+        df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+        print(f"[INFO] PLIP 요약 CSV 저장: {csv_path}")
+
+        try:
+            df.to_excel(xlsx_path, index=False)
+            print(f"[INFO] PLIP 요약 엑셀 저장: {xlsx_path}")
+        except Exception as e:
+            print(f"[WARN] PLIP 요약 엑셀 저장 실패: {e}")
 
     print(f"[INFO] PLIP 상호작용을 읽어온 구조 수: {len(metrics)}")
     return metrics, statuses
+
 
 
 def minmax_norm(value_dict, higher_is_better=True):
@@ -1204,6 +1504,13 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
         plip_hphob  = plip_data.get("hydrophobic")
         plip_salt   = plip_data.get("saltbridge")
 
+        # 체인 수 확인해서 AlphaFold 상태 결정
+        chain_counts = get_chain_residue_counts(pdb_path)
+        if len(chain_counts) == 1:
+            alphafold_status = "신뢰도 있는 결합 복합체 형성 실패(단일체 구조)"
+        else:
+            alphafold_status = "정상(단백질-펩타이드 복합체)"
+
         # 가중치
         w_prodigy = 0.35
         w_vina    = 0.20
@@ -1211,17 +1518,22 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
         w_iptm    = 0.20
 
         # 정규화된 점수 조합
-        final_score = (
-            w_prodigy * prodigy_norm.get(base, 0.0) +
-            w_vina    * vina_norm.get(base, 0.0) +
-            w_plip    * plip_norm.get(base, 0.0) +
-            w_iptm    * iptm_norm.get(base, 0.0)
-        )
+        if len(chain_counts) == 1:
+            # 단일체 구조 → 결합 복합체로 신뢰하기 어려우므로 최종 점수는 계산하지 않음
+            final_score = None
+        else:
+            final_score = (
+                w_prodigy * prodigy_norm.get(base, 0.0) +
+                w_vina    * vina_norm.get(base, 0.0) +
+                w_plip    * plip_norm.get(base, 0.0) +
+                w_iptm    * iptm_norm.get(base, 0.0)
+            )
 
         rows.append({
             "candidate_id":     candidate_id,
             "peptide_seq":      pep_seq,
             "complex_pdb":      pdb_path.name,
+            "alphafold_status": alphafold_status,
             "final_score":      final_score,
             "prodigy_dG":       prodigy,
             "prodigy_status":   prodigy_status.get(base, "미기록"),
@@ -1251,6 +1563,7 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
         "candidate_id",
         "peptide_seq",
         "complex_pdb",
+        "AlphaFold_status",
         "FinalScore_A",
         "PRODIGY_dG(kcal/mol)",
         "PRODIGY_status",
@@ -1271,6 +1584,7 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
             r["candidate_id"],
             r["peptide_seq"],
             r["complex_pdb"],
+            r["alphafold_status"],
             round(r["final_score"], 4) if r["final_score"] is not None else None,
             r["prodigy_dG"],
             r["prodigy_status"],
