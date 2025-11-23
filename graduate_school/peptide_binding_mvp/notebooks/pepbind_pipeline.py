@@ -114,7 +114,7 @@ FINAL_TABLE_HEADERS = [
     "peptide_seq",
     "complex_pdb",
     "AlphaFold_status",
-    "FinalScore_A",
+    "FinalScore",
     "PRODIGY_dG(kcal/mol)",
     "PRODIGY_status",
     "Vina_score(kcal/mol)",
@@ -1406,7 +1406,7 @@ def load_plip_scores(plip_dir: Path):
                 saltbridge = sum(1 for _ in root.iter("salt_bridge"))
                 total = hbond + hydrophobic + saltbridge
                 source = f"xml({xml_path.name})"
-                status = "정상(xml)"
+                status = "정상"
                 break
             except Exception as e:
                 debug_lines.append(
@@ -1669,7 +1669,7 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
         "peptide_seq": lambda r, idx: r["peptide_seq"],
         "complex_pdb": lambda r, idx: r["complex_pdb"],
         "AlphaFold_status": lambda r, idx: r["alphafold_status"],
-        "FinalScore_A": lambda r, idx: round(r["final_score"], 4) if r["final_score"] is not None else None,
+        "FinalScore": lambda r, idx: round(r["final_score"], 4) if r["final_score"] is not None else None,
         "PRODIGY_dG(kcal/mol)": lambda r, idx: r["prodigy_dG"],
         "PRODIGY_status": lambda r, idx: r["prodigy_status"],
         "Vina_score(kcal/mol)": lambda r, idx: r["vina_score"],
@@ -1686,7 +1686,7 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
         row_vals = [value_map[h](r, idx) for h in headers]
         ws.append(row_vals)
 
-    out_xlsx = results_dir / f"final_peptide_ranking_A_{timestamp()}.xlsx"
+    out_xlsx = results_dir / f"final_peptide_rank_{timestamp()}.xlsx"
     wb.save(out_xlsx)
     print(f"✅ 최종 결과 엑셀 저장: {out_xlsx}")
     return out_xlsx
