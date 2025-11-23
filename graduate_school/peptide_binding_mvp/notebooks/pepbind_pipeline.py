@@ -965,11 +965,30 @@ def run_plip_on_rank1(rank1_pdbs, plip_dir: Path):
         base = pdb.stem
         out_subdir = plip_dir / base
         out_subdir.mkdir(exist_ok=True)
-        cmd = f"{PLIP_CMD} -f {pdb} -o {out_subdir}"
+        cmd = f"{PLIP_CMD} -f {pdb} -o {out_subdir} -x -t"
         print(f"[RUN] {cmd}")
         log_file = out_subdir / f"{base}_plip.log"
 
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        # 체인 구성 파악 (이미 get_chain_residue_counts, auto_assign_receptor_ligand 함수 있음)
+        chain_counts = get_chain_residue_counts(pdb)
+        rec_chain, lig_chain = auto_assign_receptor_ligand(chain_counts, prefer_receptor="A")
+
+        if rec_chain is None or lig_chain is None:
+            # Vina 때처럼 스킵 처리
+            ...
+            continue
+
+        chains_expr = f"[['{rec_chain}'], ['{lig_chain}']]"  # 예: [['A'], ['B']]
+
+        cmd_list = [
+            *PLIP_CMD.split(),
+            "-f", str(pdb),
+            "-o", str(out_subdir),
+            "-x", "-t",
+            "--chains", chains_expr,
+        ]
+
+        result = subprocess.run(cmd_list, capture_output=True, text=True)
 
         with open(log_file, "w", encoding="utf-8") as lf:
             lf.write("=== STDOUT ===\n")
