@@ -181,6 +181,54 @@ def extract_chain_as_pdb(complex_pdb: Path, chain_id: str, out_pdb: Path):
         f.write("END\n")
 
 
+# ---------------------------------------------------------------------
+# 요약/최종 테이블 컬럼 설정 (여기만 고치면 순서가 반영되도록)
+# ---------------------------------------------------------------------
+
+VINA_SUMMARY_COLS = [
+    "complex",
+    "vina_status",
+    "vina_score",
+    "receptor_pdbqt",
+    "ligand_pdbqt",
+    "log_file",
+]
+
+PLIP_SUMMARY_COLS = [
+    "complex",
+    "plip_status",
+    "plip_total_interactions",
+    "plip_hbond",
+    "plip_hydrophobic",
+    "plip_saltbridge",
+]
+
+PRODIGY_SUMMARY_COLS = [
+    "complex",
+    "PRODIGY_status",
+    "PRODIGY_dG",
+]
+
+FINAL_TABLE_HEADERS = [
+    "rank",
+    "candidate_id",
+    "peptide_seq",
+    "complex_pdb",
+    "AlphaFold_status",
+    "FinalScore_A",
+    "PRODIGY_dG(kcal/mol)",
+    "PRODIGY_status",
+    "Vina_score(kcal/mol)",
+    "Vina_status",
+    "PLIP_total_interactions",
+    "PLIP_hbond",
+    "PLIP_hydrophobic",
+    "PLIP_saltbridge",
+    "PLIP_status",
+    "ipTM",
+]
+
+
 # =====================================================================
 # === STEP 2: PepMLM (ESM-2) 기반 펩타이드 생성 =======================
 # =====================================================================
@@ -720,7 +768,7 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
         return
 
     vina_dir.mkdir(parents=True, exist_ok=True)
-    summary_rows = [["complex", "vina_score", "vina_status", "receptor_pdbqt", "ligand_pdbqt", "log_file"]]
+    summary_rows = []  # 딕셔너리 리스트로 관리
     debug_lines = []
 
     for complex_pdb in rank1_pdbs:
@@ -729,6 +777,16 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
         complex_out_dir.mkdir(parents=True, exist_ok=True)
 
         log_file = complex_out_dir / f"{base}_vina_stdout.txt"
+
+        # 이 한 줄로 log_file까지 포함해 기본 row 구조를 잡아놓고 시작
+        row_data = {
+            "complex": base,
+            "vina_status": "",
+            "vina_score": None,
+            "receptor_pdbqt": "",
+            "ligand_pdbqt": "",
+            "log_file": log_file.name,
+        }
 
         print(f"\n[INFO] Vina 준비: {complex_pdb.name}")
 
@@ -740,7 +798,8 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
             status = "스킵: 체인 정보 없음(ATOM/HETATM 레코드 없음)"
             print(f"[WARN] {status}")
             log_file.write_text(status + "\n", encoding="utf-8")
-            summary_rows.append([base, None, status, "", "", log_file.name])
+            row_data["vina_status"] = status
+            summary_rows.append(row_data)
             debug_lines.append(f"{base}\t{status}\tlog={log_file.name}")
             continue
 
@@ -750,7 +809,8 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
             print(f"[WARN] {complex_pdb.name} {status}")
             msg = f"{status}\nchains={chain_counts}\n"
             log_file.write_text(msg, encoding="utf-8")
-            summary_rows.append([base, None, status, "", "", log_file.name])
+            row_data["vina_status"] = status
+            summary_rows.append(row_data)
             debug_lines.append(f"{base}\t{status}\tlog={log_file.name}")
             continue
 
@@ -761,7 +821,8 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
             print(f"[WARN] {complex_pdb.name} {status}")
             msg = f"{status}\nchains={chain_counts}\n"
             log_file.write_text(msg, encoding="utf-8")
-            summary_rows.append([base, None, status, "", "", log_file.name])
+            row_data["vina_status"] = status
+            summary_rows.append(row_data)
             debug_lines.append(f"{base}\t{status}\tlog={log_file.name}")
             continue
 
@@ -780,12 +841,15 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
             print(f"[WARN] {complex_pdb.name} {status}")
             log_msg = f"{status}\nchains={chain_counts}\n"
             log_file.write_text(log_msg, encoding="utf-8")
-            summary_rows.append([base, None, status, "", "", log_file.name])
+            row_data["vina_status"] = status
+            summary_rows.append(row_data)
             debug_lines.append(f"{base}\t{status}\tlog={log_file.name}")
             continue
 
         # 4) PDBQT 준비
         rec_pdbqt, lig_pdbqt = prepare_pdbqt(rec_pdb, lig_pdb, complex_out_dir)
+        row_data["receptor_pdbqt"] = rec_pdbqt.name
+        row_data["ligand_pdbqt"] = lig_pdbqt.name
         box = compute_box_from_ligand(lig_pdb)
 
         out_pdbqt = complex_out_dir / f"{base}_vina_out.pdbqt"
@@ -848,21 +912,25 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
                 print(f"[WARN] {complex_pdb.name} Vina 점수 파싱 실패. 로그 파일 확인: {log_file}")
                 debug_lines.append(f"{base}\t{status}\tlog={log_file.name}")
             else:
-                if best_score == 0.0:
-                    status = "정상(점수=0.0)"
-                else:
-                    status = "정상"
+                status = "정상"
                 print(f"[INFO] {complex_pdb.name} Vina best score: {best_score}")
                 debug_lines.append(f"{base}\t{status}\t{best_score}")
 
-        summary_rows.append([base, best_score, status, rec_pdbqt.name, lig_pdbqt.name, log_file.name])
+        row_data["vina_status"] = status
+        row_data["vina_score"] = best_score
+        summary_rows.append(row_data)
 
     # 요약 엑셀 저장 (첫 행은 헤더)
     try:
-        df_vina = pd.DataFrame(summary_rows[1:], columns=summary_rows[0])
-        xlsx_path = vina_dir / "vina_summary.xlsx"
-        df_vina.to_excel(xlsx_path, index=False)
-        print(f"\n✅ Vina 요약 엑셀 저장: {xlsx_path}")
+        if summary_rows:
+            df_vina = pd.DataFrame(summary_rows)
+            # 컬럼 순서를 상수로 강제
+            df_vina = df_vina[VINA_SUMMARY_COLS]
+            xlsx_path = vina_dir / "vina_summary.xlsx"
+            df_vina.to_excel(xlsx_path, index=False)
+            print(f"\n✅ Vina 요약 엑셀 저장: {xlsx_path}")
+        else:
+            print("[INFO] Vina 요약에 기록할 데이터가 없습니다.")
     except Exception as e:
         print(f"[WARN] Vina 요약 엑셀 저장 실패: {e}")
 
@@ -943,7 +1011,7 @@ def run_prodigy_on_rank1(rank1_pdbs, out_dir: Path) -> pd.DataFrame:
     PRODIGY 결합 친화도 평가.
 
     - prodigy_summary.xlsx 컬럼:
-        complex, PRODIGY_dG, prodigy_status
+        complex, PRODIGY_status, PRODIGY_dG
     """
     print("\n" + "="*80)
     print("STEP 6: PRODIGY 결합 친화도 평가")
@@ -994,8 +1062,8 @@ def run_prodigy_on_rank1(rank1_pdbs, out_dir: Path) -> pd.DataFrame:
 
         records.append({
             "complex": complex_name,
+            "PRODIGY_status": status,
             "PRODIGY_dG": dg,
-            "prodigy_status": status,
         })
         debug_lines.append(f"{complex_name}\t{status}\t{dg}")
 
@@ -1008,8 +1076,12 @@ def run_prodigy_on_rank1(rank1_pdbs, out_dir: Path) -> pd.DataFrame:
 
     xlsx_path = out_dir / "prodigy_summary.xlsx"
     try:
-        df.to_excel(xlsx_path, index=False)
-        print(f"✅ PRODIGY 요약 엑셀 저장: {xlsx_path}")
+        if not df.empty:
+            df = df[PRODIGY_SUMMARY_COLS]
+            df.to_excel(xlsx_path, index=False)
+            print(f"✅ PRODIGY 요약 엑셀 저장: {xlsx_path}")
+        else:
+            print("[INFO] PRODIGY 요약에 기록할 데이터가 없습니다.")
     except Exception as e:
         print(f"[WARN] PRODIGY 요약 엑셀 저장 실패: {e}")
 
@@ -1116,14 +1188,16 @@ def load_prodigy_scores(prodigy_dir: Path):
         print(f"[WARN] prodigy_summary.xlsx 로딩 실패: {e}")
 
     if df is not None and "complex" in df.columns:
-        # 값 컬럼 찾기 (prodigy_dg, PRODIGY_dG 등)
+        # 값 컬럼(prodgy_dg, PRODIGY_dG 등) / 상태 컬럼(prodigy_status, PRODIGY_status 등) 자동 탐색
         val_col = None
+        status_col = None
         for c in df.columns:
             cl = c.lower()
-            if cl.startswith("prodigy") and "status" not in cl:
-                val_col = c
-                break
-        has_status = "prodigy_status" in df.columns
+            if cl.startswith("prodigy"):
+                if "status" in cl and status_col is None:
+                    status_col = c
+                elif "status" not in cl and val_col is None:
+                    val_col = c
 
         for _, row in df.iterrows():
             comp = row.get("complex")
@@ -1139,8 +1213,8 @@ def load_prodigy_scores(prodigy_dir: Path):
             except (TypeError, ValueError):
                 scores[comp] = None
 
-            if has_status:
-                s = row.get("prodigy_status")
+            if status_col is not None:
+                s = row.get(status_col)
                 statuses[comp] = "" if pd.isna(s) else str(s)
             else:
                 statuses[comp] = "정상" if scores[comp] is not None else "미기록"
@@ -1313,9 +1387,11 @@ def load_plip_scores(plip_dir: Path):
                     f"{base}\treport_xml_parse_error({xml_path.name})\t{e}"
                 )
 
-        # 2) 텍스트 report 후보들 (재귀적으로 *.txt 전체 탐색)
+        # 2) 텍스트 report/log 후보들 (재귀적으로 *.txt, *.log 전체 탐색)
         if source is None:
-            txt_candidates = sorted(subdir.rglob("*.txt"))
+            txt_candidates = sorted(
+                list(subdir.rglob("*.txt")) + list(subdir.rglob("*.log"))
+            )
             # 파일명에 report 가 들어간 파일을 우선
             txt_candidates.sort(
                 key=lambda p: (
@@ -1353,7 +1429,7 @@ def load_plip_scores(plip_dir: Path):
                         saltbridge = sb
                         total = hbond + hydrophobic + saltbridge
                         source = f"txt({txt_report.name})"
-                        status = "정상(report.txt)"
+                        status = "정상(txt/log)"
                         break
                 except Exception as e:
                     debug_lines.append(
@@ -1400,15 +1476,17 @@ def load_plip_scores(plip_dir: Path):
     for base, m in metrics.items():
         summary_rows.append({
             "complex": base,
+            "plip_status": statuses.get(base, ""),
             "plip_total_interactions": m["total"],
             "plip_hbond": m["hbond"],
             "plip_hydrophobic": m["hydrophobic"],
             "plip_saltbridge": m["saltbridge"],
-            "plip_status": statuses.get(base, ""),
         })
 
     if summary_rows:
         df = pd.DataFrame(summary_rows)
+        # 컬럼 순서를 상수로 관리
+        df = df[PLIP_SUMMARY_COLS]
         xlsx_path = plip_dir / "plip_summary.xlsx"
         try:
             df.to_excel(xlsx_path, index=False)
@@ -1555,45 +1633,32 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
     ws = wb.active
     ws.title = "pepbind_ranking_A"
 
-    headers = [
-        "rank",
-        "candidate_id",
-        "peptide_seq",
-        "complex_pdb",
-        "AlphaFold_status",
-        "FinalScore_A",
-        "PRODIGY_dG(kcal/mol)",
-        "PRODIGY_status",
-        "Vina_score(kcal/mol)",
-        "Vina_status",
-        "PLIP_total_interactions",
-        "PLIP_hbond",
-        "PLIP_hydrophobic",
-        "PLIP_saltbridge",
-        "PLIP_status",
-        "ipTM",
-    ]
+    headers = FINAL_TABLE_HEADERS
     ws.append(headers)
 
+    # 헤더 이름 → 값 계산 함수 매핑
+    value_map = {
+        "rank": lambda r, idx: idx,
+        "candidate_id": lambda r, idx: r["candidate_id"],
+        "peptide_seq": lambda r, idx: r["peptide_seq"],
+        "complex_pdb": lambda r, idx: r["complex_pdb"],
+        "AlphaFold_status": lambda r, idx: r["alphafold_status"],
+        "FinalScore_A": lambda r, idx: round(r["final_score"], 4) if r["final_score"] is not None else None,
+        "PRODIGY_dG(kcal/mol)": lambda r, idx: r["prodigy_dG"],
+        "PRODIGY_status": lambda r, idx: r["prodigy_status"],
+        "Vina_score(kcal/mol)": lambda r, idx: r["vina_score"],
+        "Vina_status": lambda r, idx: r["vina_status"],
+        "PLIP_total_interactions": lambda r, idx: r["plip_total"],
+        "PLIP_hbond": lambda r, idx: r["plip_hbond"],
+        "PLIP_hydrophobic": lambda r, idx: r["plip_hphob"],
+        "PLIP_saltbridge": lambda r, idx: r["plip_salt"],
+        "PLIP_status": lambda r, idx: r["plip_status"],
+        "ipTM": lambda r, idx: r["iptm"],
+    }
+
     for idx, r in enumerate(rows, start=1):
-        ws.append([
-            idx,
-            r["candidate_id"],
-            r["peptide_seq"],
-            r["complex_pdb"],
-            r["alphafold_status"],
-            round(r["final_score"], 4) if r["final_score"] is not None else None,
-            r["prodigy_dG"],
-            r["prodigy_status"],
-            r["vina_score"],
-            r["vina_status"],
-            r["plip_total"],
-            r["plip_hbond"],
-            r["plip_hphob"],
-            r["plip_salt"],
-            r["plip_status"],
-            r["iptm"],
-        ])
+        row_vals = [value_map[h](r, idx) for h in headers]
+        ws.append(row_vals)
 
     out_xlsx = results_dir / f"final_peptide_ranking_A_{timestamp()}.xlsx"
     wb.save(out_xlsx)
