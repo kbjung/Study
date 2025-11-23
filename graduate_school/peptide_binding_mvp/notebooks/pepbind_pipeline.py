@@ -83,6 +83,51 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"[INFO] PyTorch device: {DEVICE}")
 
 
+# 요약/최종 테이블 컬럼 설정 (여기만 고치면 순서가 반영되도록)
+VINA_SUMMARY_COLS = [
+    "complex",
+    "vina_status",
+    "vina_score",
+    "receptor_pdbqt",
+    "ligand_pdbqt",
+    "log_file",
+]
+
+PLIP_SUMMARY_COLS = [
+    "complex",
+    "plip_status",
+    "plip_total_interactions",
+    "plip_hbond",
+    "plip_hydrophobic",
+    "plip_saltbridge",
+]
+
+PRODIGY_SUMMARY_COLS = [
+    "complex",
+    "PRODIGY_status",
+    "PRODIGY_dG",
+]
+
+FINAL_TABLE_HEADERS = [
+    "rank",
+    "candidate_id",
+    "peptide_seq",
+    "complex_pdb",
+    "AlphaFold_status",
+    "FinalScore_A",
+    "PRODIGY_dG(kcal/mol)",
+    "PRODIGY_status",
+    "Vina_score(kcal/mol)",
+    "Vina_status",
+    "PLIP_total_interactions",
+    "PLIP_hbond",
+    "PLIP_hydrophobic",
+    "PLIP_saltbridge",
+    "PLIP_status",
+    "ipTM",
+]
+
+
 def timestamp():
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -179,54 +224,6 @@ def extract_chain_as_pdb(complex_pdb: Path, chain_id: str, out_pdb: Path):
             f.write(ln + "\n")
         f.write(f"TER\n")
         f.write("END\n")
-
-
-# ---------------------------------------------------------------------
-# 요약/최종 테이블 컬럼 설정 (여기만 고치면 순서가 반영되도록)
-# ---------------------------------------------------------------------
-
-VINA_SUMMARY_COLS = [
-    "complex",
-    "vina_status",
-    "vina_score",
-    "receptor_pdbqt",
-    "ligand_pdbqt",
-    "log_file",
-]
-
-PLIP_SUMMARY_COLS = [
-    "complex",
-    "plip_status",
-    "plip_total_interactions",
-    "plip_hbond",
-    "plip_hydrophobic",
-    "plip_saltbridge",
-]
-
-PRODIGY_SUMMARY_COLS = [
-    "complex",
-    "PRODIGY_status",
-    "PRODIGY_dG",
-]
-
-FINAL_TABLE_HEADERS = [
-    "rank",
-    "candidate_id",
-    "peptide_seq",
-    "complex_pdb",
-    "AlphaFold_status",
-    "FinalScore_A",
-    "PRODIGY_dG(kcal/mol)",
-    "PRODIGY_status",
-    "Vina_score(kcal/mol)",
-    "Vina_status",
-    "PLIP_total_interactions",
-    "PLIP_hbond",
-    "PLIP_hydrophobic",
-    "PLIP_saltbridge",
-    "PLIP_status",
-    "ipTM",
-]
 
 
 # =====================================================================
