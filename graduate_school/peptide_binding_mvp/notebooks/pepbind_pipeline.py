@@ -876,13 +876,12 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
         writer.writerows(summary_rows)
     print(f"\n[INFO] Vina 요약 csv 저장: {summary_csv}")
 
-    # 엑셀 요약도 추가
+    # 요약 엑셀 저장 (첫 행은 헤더)
     try:
-        # 첫 행은 헤더, 나머지는 데이터
         df_vina = pd.DataFrame(summary_rows[1:], columns=summary_rows[0])
         xlsx_path = vina_dir / "vina_summary.xlsx"
         df_vina.to_excel(xlsx_path, index=False)
-        print(f"[INFO] Vina 요약 엑셀 저장: {xlsx_path}")
+        print(f"\n✅ Vina 요약 엑셀 저장: {xlsx_path}")
     except Exception as e:
         print(f"[WARN] Vina 요약 엑셀 저장 실패: {e}")
 
@@ -945,7 +944,7 @@ def run_plip_on_rank1(rank1_pdbs, plip_dir: Path):
         debug_file.write_text("\n".join(debug_lines), encoding="utf-8")
         print(f"\n[INFO] PLIP 실행 디버그 로그: {debug_file}")
 
-    # PLIP 결과 요약 파일(plip_summary.csv / .xlsx) 생성
+    # PLIP 결과 요약 파일(plip_summary.xlsx) 생성
     try:
         load_plip_scores(plip_dir)
     except Exception as e:
@@ -962,12 +961,8 @@ def run_prodigy_on_rank1(rank1_pdbs, out_dir: Path) -> pd.DataFrame:
     """
     PRODIGY 결합 친화도 평가.
 
-    - prodigy_summary.csv 컬럼:
+    - prodigy_summary.xlsx 컬럼:
         complex, PRODIGY_dG, prodigy_status
-    - prodigy_status 예시:
-        '정상',
-        '실패: PRODIGY 실행 에러(code=...)',
-        '파싱실패: stdout에서 ΔG 패턴 없음'
     """
     print("\n" + "="*80)
     print("STEP 6: PRODIGY 결합 친화도 평가")
@@ -1030,19 +1025,14 @@ def run_prodigy_on_rank1(rank1_pdbs, out_dir: Path) -> pd.DataFrame:
 
     df = pd.DataFrame(records)
 
-    csv_path = out_dir / "prodigy_summary.csv"
-    df.to_csv(csv_path, index=False, encoding="utf-8-sig")
-    print(f"✅ PRODIGY 요약 저장: {csv_path}")
-
+    xlsx_path = out_dir / "prodigy_summary.xlsx"
     try:
-        xlsx_path = out_dir / "prodigy_summary.xlsx"
         df.to_excel(xlsx_path, index=False)
-        print(f"[INFO] PRODIGY 요약 엑셀 저장: {xlsx_path}")
+        print(f"✅ PRODIGY 요약 엑셀 저장: {xlsx_path}")
     except Exception as e:
         print(f"[WARN] PRODIGY 요약 엑셀 저장 실패: {e}")
 
     return df
-
 
 
 # =====================================================================
@@ -1069,7 +1059,7 @@ def zip_rank1_pdbs(rank1_pdbs, results_dir: Path):
 
 def load_vina_scores(vina_dir: Path):
     """
-    vina_summary.csv 에서 complex별 Vina score와 상태를 로딩.
+    vina_summary.xlsx 에서 complex별 Vina score와 상태를 로딩.
 
     반환:
       scores   : dict[complex_id] = float 또는 None
@@ -1078,19 +1068,30 @@ def load_vina_scores(vina_dir: Path):
     scores = {}
     statuses = {}
 
-    summary_csv = vina_dir / "vina_summary.csv"
-    if not summary_csv.exists():
-        print("[WARN] Vina summary CSV가 존재하지 않습니다:", summary_csv)
-        return scores, statuses
+    summary_xlsx = vina_dir / "vina_summary.xlsx"
+    df = None
 
-    try:
-        df = pd.read_csv(summary_csv)
-    except Exception as e:
-        print(f"[WARN] Vina summary CSV 로딩 실패: {e}")
-        return scores, statuses
+    if summary_xlsx.exists():
+        try:
+            df = pd.read_excel(summary_xlsx)
+            print(f"[INFO] Vina 요약 엑셀에서 점수 로드: {summary_xlsx}")
+        except Exception as e:
+            print(f"[WARN] Vina 엑셀 로딩 실패: {e}")
+    else:
+        # 구버전 호환: vina_summary.csv 가 있다면 사용
+        summary_csv = vina_dir / "vina_summary.csv"
+        if summary_csv.exists():
+            try:
+                df = pd.read_csv(summary_csv)
+                print(f"[INFO] Vina 요약 CSV에서 점수 로드: {summary_csv}")
+            except Exception as e:
+                print(f"[WARN] Vina summary CSV 로딩 실패: {e}")
+        else:
+            print("[WARN] Vina summary 파일(vina_summary.xlsx)를 찾지 못했습니다:", vina_dir)
+            return scores, statuses
 
-    if "complex" not in df.columns:
-        print("[WARN] Vina summary CSV에 'complex' 컬럼이 없습니다.")
+    if df is None or "complex" not in df.columns:
+        print("[WARN] Vina summary 데이터프레임에 'complex' 컬럼이 없습니다.")
         return scores, statuses
 
     has_status = "vina_status" in df.columns
@@ -1113,7 +1114,6 @@ def load_vina_scores(vina_dir: Path):
             s = row.get("vina_status")
             statuses[base] = "" if pd.isna(s) else str(s)
         else:
-            # 구버전 summary에는 상태가 없으므로 점수 유무로만 대략 추정
             statuses[base] = "정상" if scores[base] is not None else "미기록"
 
     print(f"[INFO] Vina 점수를 읽어온 구조 수: {len(scores)}")
@@ -1125,12 +1125,9 @@ def load_prodigy_scores(prodigy_dir: Path):
     PRODIGY 결과 로딩.
 
     우선순위:
-      1) prodigy_summary.csv (있다면)
-      2) 없으면 *_prodigy.txt 백업 파싱
-
-    반환:
-      scores   : dict[complex_id] = float 또는 None
-      statuses : dict[complex_id] = 상태 문자열
+      1) prodigy_summary.xlsx (있다면)
+      2) 없으면 prodigy_summary.csv (구버전 호환)
+      3) 그래도 없으면 *_prodigy.txt 백업 파싱
     """
     scores = {}
     statuses = {}
@@ -1138,43 +1135,56 @@ def load_prodigy_scores(prodigy_dir: Path):
     if not prodigy_dir.exists():
         return scores, statuses
 
-    summary_csv = prodigy_dir / "prodigy_summary.csv"
-    if summary_csv.exists():
+    df = None
+
+    summary_xlsx = prodigy_dir / "prodigy_summary.xlsx"
+    if summary_xlsx.exists():
         try:
-            df = pd.read_csv(summary_csv)
-            if "complex" in df.columns:
-                # 값 컬럼 찾기 (prodigy_dg, PRODGIGY_dG 등)
-                val_col = None
-                for c in df.columns:
-                    cl = c.lower()
-                    if cl.startswith("prodigy") and "status" not in cl:
-                        val_col = c
-                        break
-                has_status = "prodigy_status" in df.columns
-
-                for _, row in df.iterrows():
-                    comp = row.get("complex")
-                    if isinstance(comp, float) and pd.isna(comp):
-                        continue
-                    comp = str(comp).strip()
-                    if not comp:
-                        continue
-
-                    val = row.get(val_col) if val_col is not None else None
-                    try:
-                        scores[comp] = float(val)
-                    except (TypeError, ValueError):
-                        scores[comp] = None
-
-                    if has_status:
-                        s = row.get("prodigy_status")
-                        statuses[comp] = "" if pd.isna(s) else str(s)
-                    else:
-                        statuses[comp] = "정상" if scores[comp] is not None else "미기록"
-
-            print(f"[INFO] PRODIGY ΔG를 요약 파일에서 불러옴: {len(scores)}개 구조")
+            df = pd.read_excel(summary_xlsx)
+            print(f"[INFO] PRODIGY 요약 엑셀에서 점수 로드: {summary_xlsx}")
         except Exception as e:
-            print(f"[WARN] prodigy_summary.csv 로딩 실패: {e}")
+            print(f"[WARN] prodigy_summary.xlsx 로딩 실패: {e}")
+    else:
+        # 구버전 호환
+        summary_csv = prodigy_dir / "prodigy_summary.csv"
+        if summary_csv.exists():
+            try:
+                df = pd.read_csv(summary_csv)
+                print(f"[INFO] PRODIGY 요약 CSV에서 점수 로드: {summary_csv}")
+            except Exception as e:
+                print(f"[WARN] prodigy_summary.csv 로딩 실패: {e}")
+
+    if df is not None and "complex" in df.columns:
+        # 값 컬럼 찾기 (prodigy_dg, PRODIGY_dG 등)
+        val_col = None
+        for c in df.columns:
+            cl = c.lower()
+            if cl.startswith("prodigy") and "status" not in cl:
+                val_col = c
+                break
+        has_status = "prodigy_status" in df.columns
+
+        for _, row in df.iterrows():
+            comp = row.get("complex")
+            if isinstance(comp, float) and pd.isna(comp):
+                continue
+            comp = str(comp).strip()
+            if not comp:
+                continue
+
+            val = row.get(val_col) if val_col is not None else None
+            try:
+                scores[comp] = float(val)
+            except (TypeError, ValueError):
+                scores[comp] = None
+
+            if has_status:
+                s = row.get("prodigy_status")
+                statuses[comp] = "" if pd.isna(s) else str(s)
+            else:
+                statuses[comp] = "정상" if scores[comp] is not None else "미기록"
+
+        print(f"[INFO] PRODIGY ΔG를 요약 파일에서 불러옴: {len(scores)}개 구조")
 
     # summary에서 뭔가 읽어왔다면 그대로 사용
     if scores or statuses:
@@ -1282,8 +1292,8 @@ def load_plip_scores(plip_dir: Path):
     PLIP 결과 폴더들에서 상호작용 스코어 + 상태를 추출.
 
     - 각 complex별 서브폴더 이름이 complex_0_unrelaxed_... 형태라고 가정.
-    - 우선 report.xml, 없으면 report.txt를 사용.
-    - 아무 것도 없으면 plip_status에 이유를 기록하고 상호작용 수는 None으로 둔다.
+    - 폴더 안/하위폴더 전체에서 *.xml / *.txt 파일을 찾아
+      PLIP가 생성한 report 파일로부터 상호작용 수를 추출한다.
 
     반환:
       metrics  : dict[base] = {
@@ -1307,8 +1317,6 @@ def load_plip_scores(plip_dir: Path):
             continue
 
         base = subdir.name
-        xml_path = subdir / "report.xml"
-        txt_report = subdir / "report.txt"
 
         hbond = 0
         hydrophobic = 0
@@ -1318,8 +1326,17 @@ def load_plip_scores(plip_dir: Path):
         source = None
         status = ""
 
-        # 1) report.xml 우선
-        if xml_path.exists():
+        # 1) report xml 후보들 (재귀적으로 *.xml 전체 탐색)
+        xml_candidates = sorted(subdir.rglob("*.xml"))
+        # 파일명에 'report'/'plip' 가 포함된 것을 우선
+        xml_candidates.sort(
+            key=lambda p: (
+                "report" not in p.name.lower() and "plip" not in p.name.lower(),
+                p.name,
+            )
+        )
+
+        for xml_path in xml_candidates:
             try:
                 tree = ET.parse(xml_path)
                 root = tree.getroot()
@@ -1327,38 +1344,64 @@ def load_plip_scores(plip_dir: Path):
                 hydrophobic = sum(1 for _ in root.iter("hydrophobic_interaction"))
                 saltbridge = sum(1 for _ in root.iter("salt_bridge"))
                 total = hbond + hydrophobic + saltbridge
-                source = "xml"
+                source = f"xml({xml_path.name})"
                 status = "정상(xml)"
+                break
             except Exception as e:
-                status = f"실패: report.xml 파싱 에러({e})"
-                debug_lines.append(f"{base}\treport_xml_parse_error\t{e}")
+                debug_lines.append(
+                    f"{base}\treport_xml_parse_error({xml_path.name})\t{e}"
+                )
 
-        # 2) report.txt 백업
-        if source is None and txt_report.exists():
-            try:
-                text = txt_report.read_text()
-                for line in text.splitlines():
-                    lower = line.lower()
-                    nums = re.findall(r"\b\d+\b", line)
-                    if not nums:
-                        continue
-                    last_num = int(nums[-1])
-                    if "hydrogen bond" in lower:
-                        hbond = last_num
-                    elif "hydrophobic" in lower:
-                        hydrophobic = last_num
-                    elif "salt bridge" in lower:
-                        saltbridge = last_num
-                total = hbond + hydrophobic + saltbridge
-                source = "report.txt"
-                status = "정상(report.txt)"
-            except Exception as e:
-                status = f"실패: report.txt 파싱 에러({e})"
-                debug_lines.append(f"{base}\treport_txt_parse_error\t{e}")
+        # 2) 텍스트 report 후보들 (재귀적으로 *.txt 전체 탐색)
+        if source is None:
+            txt_candidates = sorted(subdir.rglob("*.txt"))
+            # 파일명에 report 가 들어간 파일을 우선
+            txt_candidates.sort(
+                key=lambda p: (
+                    "report" not in p.name.lower(),
+                    p.name,
+                )
+            )
 
-        # 3) 둘 다 없으면 → 실패 처리
+            for txt_report in txt_candidates:
+                try:
+                    text = txt_report.read_text()
+                    hb = 0
+                    hp = 0
+                    sb = 0
+                    found_any = False
+                    for line in text.splitlines():
+                        lower = line.lower()
+                        nums = re.findall(r"\b\d+\b", line)
+                        if not nums:
+                            continue
+                        last_num = int(nums[-1])
+                        if "hydrogen bond" in lower:
+                            hb = last_num
+                            found_any = True
+                        elif "hydrophobic" in lower:
+                            hp = last_num
+                            found_any = True
+                        elif "salt bridge" in lower:
+                            sb = last_num
+                            found_any = True
+                    # 상호작용 라인 하나라도 찾으면 성공으로 간주 (0개여도 가능)
+                    if found_any:
+                        hbond = hb
+                        hydrophobic = hp
+                        saltbridge = sb
+                        total = hbond + hydrophobic + saltbridge
+                        source = f"txt({txt_report.name})"
+                        status = "정상(report.txt)"
+                        break
+                except Exception as e:
+                    debug_lines.append(
+                        f"{base}\treport_txt_parse_error({txt_report.name})\t{e}"
+                    )
+
+        # 3) 둘 다 실패하면 상태 메시지
         if source is None and not status:
-            status = "실패: report.xml/report.txt 없음 (PLIP 출력에 상호작용 요약 파일이 없음)"
+            status = "실패: PLIP 요약 파일(xml/txt)을 찾지 못함"
 
         # total이 없거나 실패 상태면 세부값을 None으로
         if total is None or status.startswith("실패"):
@@ -1391,7 +1434,7 @@ def load_plip_scores(plip_dir: Path):
         debug_file.write_text("\n".join(debug_lines), encoding="utf-8")
         print(f"[INFO] PLIP 파싱 디버그 로그: {debug_file}")
 
-    # 요약 CSV (각 complex별 한 줄)
+    # 요약 엑셀 (각 complex별 한 줄)
     summary_rows = []
     for base, m in metrics.items():
         summary_rows.append({
@@ -1405,13 +1448,7 @@ def load_plip_scores(plip_dir: Path):
 
     if summary_rows:
         df = pd.DataFrame(summary_rows)
-        csv_path = plip_dir / "plip_summary.csv"
         xlsx_path = plip_dir / "plip_summary.xlsx"
-
-        # 엑셀에서 한글 안 깨지게 utf-8-sig 로 저장
-        df.to_csv(csv_path, index=False, encoding="utf-8-sig")
-        print(f"[INFO] PLIP 요약 CSV 저장: {csv_path}")
-
         try:
             df.to_excel(xlsx_path, index=False)
             print(f"[INFO] PLIP 요약 엑셀 저장: {xlsx_path}")
@@ -1420,7 +1457,6 @@ def load_plip_scores(plip_dir: Path):
 
     print(f"[INFO] PLIP 상호작용을 읽어온 구조 수: {len(metrics)}")
     return metrics, statuses
-
 
 
 def minmax_norm(value_dict, higher_is_better=True):
