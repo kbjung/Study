@@ -83,19 +83,6 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"[INFO] PyTorch device: {DEVICE}")
 
 
-def run(cmd, cwd=None):
-    """서브프로세스 실행 래퍼 (간단 버전)."""
-    print(f"[RUN] {cmd}")
-    result = subprocess.run(
-        cmd,
-        cwd=cwd,
-        shell=isinstance(cmd, str),
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"Command failed (code={result.returncode}): {cmd}")
-    return result
-
-
 def timestamp():
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -710,7 +697,7 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
     """
     AutoDock Vina 도킹 실행 + 요약/상태 로그 기록.
 
-    - vina_summary.csv 컬럼:
+    - vina_summary.xlsx 컬럼:
         complex, vina_score, vina_status, receptor_pdbqt, ligand_pdbqt, log_file
     - vina_status 예시:
         '정상', '정상(점수=0.0)',
@@ -869,12 +856,6 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
                 debug_lines.append(f"{base}\t{status}\t{best_score}")
 
         summary_rows.append([base, best_score, status, rec_pdbqt.name, lig_pdbqt.name, log_file.name])
-
-    summary_csv = vina_dir / "vina_summary.csv"
-    with open(summary_csv, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.writer(f)
-        writer.writerows(summary_rows)
-    print(f"\n[INFO] Vina 요약 csv 저장: {summary_csv}")
 
     # 요약 엑셀 저장 (첫 행은 헤더)
     try:
@@ -1078,17 +1059,8 @@ def load_vina_scores(vina_dir: Path):
         except Exception as e:
             print(f"[WARN] Vina 엑셀 로딩 실패: {e}")
     else:
-        # 구버전 호환: vina_summary.csv 가 있다면 사용
-        summary_csv = vina_dir / "vina_summary.csv"
-        if summary_csv.exists():
-            try:
-                df = pd.read_csv(summary_csv)
-                print(f"[INFO] Vina 요약 CSV에서 점수 로드: {summary_csv}")
-            except Exception as e:
-                print(f"[WARN] Vina summary CSV 로딩 실패: {e}")
-        else:
-            print("[WARN] Vina summary 파일(vina_summary.xlsx)를 찾지 못했습니다:", vina_dir)
-            return scores, statuses
+        print("[WARN] Vina summary 파일(vina_summary.xlsx)를 찾지 못했습니다:", vina_dir)
+        return scores, statuses
 
     if df is None or "complex" not in df.columns:
         print("[WARN] Vina summary 데이터프레임에 'complex' 컬럼이 없습니다.")
@@ -1126,8 +1098,7 @@ def load_prodigy_scores(prodigy_dir: Path):
 
     우선순위:
       1) prodigy_summary.xlsx (있다면)
-      2) 없으면 prodigy_summary.csv (구버전 호환)
-      3) 그래도 없으면 *_prodigy.txt 백업 파싱
+      2) 없으면 *_prodigy.txt 백업 파싱
     """
     scores = {}
     statuses = {}
@@ -1138,21 +1109,11 @@ def load_prodigy_scores(prodigy_dir: Path):
     df = None
 
     summary_xlsx = prodigy_dir / "prodigy_summary.xlsx"
-    if summary_xlsx.exists():
-        try:
-            df = pd.read_excel(summary_xlsx)
-            print(f"[INFO] PRODIGY 요약 엑셀에서 점수 로드: {summary_xlsx}")
-        except Exception as e:
-            print(f"[WARN] prodigy_summary.xlsx 로딩 실패: {e}")
-    else:
-        # 구버전 호환
-        summary_csv = prodigy_dir / "prodigy_summary.csv"
-        if summary_csv.exists():
-            try:
-                df = pd.read_csv(summary_csv)
-                print(f"[INFO] PRODIGY 요약 CSV에서 점수 로드: {summary_csv}")
-            except Exception as e:
-                print(f"[WARN] prodigy_summary.csv 로딩 실패: {e}")
+    try:
+        df = pd.read_excel(summary_xlsx)
+        print(f"[INFO] PRODIGY 요약 엑셀에서 점수 로드: {summary_xlsx}")
+    except Exception as e:
+        print(f"[WARN] prodigy_summary.xlsx 로딩 실패: {e}")
 
     if df is not None and "complex" in df.columns:
         # 값 컬럼 찾기 (prodigy_dg, PRODIGY_dG 등)
