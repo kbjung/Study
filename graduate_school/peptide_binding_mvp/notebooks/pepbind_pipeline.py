@@ -1068,13 +1068,23 @@ def run_prodigy_on_rank1(rank1_pdbs, out_dir: Path) -> pd.DataFrame:
             print(f"[ERROR] {status}: {complex_name}. 로그: {out_txt.name}, {err_txt.name}")
             print((result.stderr or "")[:300])
         else:
-            # stdout에서 ΔG 값 파싱
-            dg = parse_prodigy_dg_from_stdout(result.stdout or "")
-            if dg is None:
-                status = "파싱실패: stdout에서 ΔG 패턴 없음"
-                print(f"[WARN] PRODIGY ΔG 파싱 실패: {complex_name}. (로그: {out_txt.name})")
+            stdout_text = result.stdout or ""
+            lower = stdout_text.lower()
+
+            # 1) 선택한 체인 사이에 접촉이 전혀 없는 경우
+            if "no contacts found for selection" in lower:
+                status = "실패: No contacts found for selection(선택된 체인 간 접촉 없음)"
+                dg = None
+                print(f"[WARN] PRODIGY 접촉 없음: {complex_name}. (로그: {out_txt.name})")
+
+            # 2) 접촉은 있는데 ΔG 라인이 없어서 파싱 실패한 경우
             else:
-                status = "정상"
+                dg = parse_prodigy_dg_from_stdout(stdout_text)
+                if dg is None:
+                    status = "파싱실패: stdout에서 ΔG 패턴 없음"
+                    print(f"[WARN] PRODIGY ΔG 파싱 실패: {complex_name}. (로그: {out_txt.name})")
+                else:
+                    status = "정상"
 
         records.append({
             "complex": complex_name,
