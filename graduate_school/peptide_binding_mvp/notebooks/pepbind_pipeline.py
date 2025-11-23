@@ -1648,10 +1648,14 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
             "iptm":             iptm,
         })
 
-    # FinalScore_A 기준으로 내림차순 정렬
+    # FinalScore 기준으로 내림차순 정렬
+    # - final_score가 None 인 경우는 가장 아래로 보내고
+    # - 나머지는 점수 큰 순서대로 정렬
     rows.sort(
-        key=lambda r: (r["final_score"] if r["final_score"] is not None else -1e9),
-        reverse=True,
+        key=lambda r: (
+            r["final_score"] is None,                         # False(0) -> 점수 있음, True(1) -> 점수 없음
+            0.0 if r["final_score"] is None else -r["final_score"],  # 점수 있는 것끼리는 -score로 내림차순
+        )
     )
 
     # 엑셀 작성
