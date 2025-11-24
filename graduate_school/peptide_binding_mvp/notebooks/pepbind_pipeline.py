@@ -26,6 +26,7 @@ import json
 import zipfile
 import shutil
 import subprocess
+import gc
 from pathlib import Path
 from datetime import datetime
 
@@ -73,6 +74,21 @@ PRODIGY_SCRIPT  = os.environ.get("PRODIGY_SCRIPT", "prodigy").strip()
 
 OBABEL_CMD = shutil.which("obabel") or "obabel"
 
+# ColabFold 자원/안전 관련 설정
+# 기본값은 32:128, 메모리 많이 부족하면 환경변수나 여기 값을 "16:64"로 줄여도 됨
+COLABFOLD_MAX_MSA = os.environ.get("COLABFOLD_MAX_MSA", "16:64")
+
+# 진행률이 일정 시간 이상 변화 없으면 강제 종료 (메모리 부족/프리징 방지용)
+COLABFOLD_MAX_IDLE_MIN = int(os.environ.get("COLABFOLD_MAX_IDLE_MIN", "30"))   # 예: 30분
+
+# 전체 ColabFold 실행 시간 상한 (분)
+COLABFOLD_MAX_TOTAL_MIN = int(os.environ.get("COLABFOLD_MAX_TOTAL_MIN", "360"))  # 예: 6시간
+
+# GPU에서 OOM(RESOURCE_EXHAUSTED / Out of memory) 나면 CPU로 한 번 더 재시도할지 여부
+COLABFOLD_CPU_FALLBACK = os.environ.get("COLABFOLD_CPU_FALLBACK", "1").lower() not in (
+    "0", "false", "no", "off"
+)
+
 # =====================================================================
 # === 공통 설정 / 유틸 =================================================
 # =====================================================================
@@ -82,6 +98,9 @@ BASE_DIR.mkdir(parents=True, exist_ok=True)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"[INFO] PyTorch device: {DEVICE}")
 
+# JAX / ColabFold 메모리 설정 (모든 자식 프로세스에 적용)
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.8"
 
 # 요약/최종 테이블 컬럼 설정 (여기만 고치면 순서가 반영되도록)
 VINA_SUMMARY_COLS = [
@@ -226,6 +245,32 @@ def extract_chain_as_pdb(complex_pdb: Path, chain_id: str, out_pdb: Path):
         f.write("END\n")
 
 
+def clear_gpu_memory():
+    """
+    ColabFold 실행 전/후에 PyTorch CUDA 캐시와 파이썬 객체를 정리해서
+    GPU 메모리를 최대한 비워주는 헬퍼 함수.
+    (colabfold_batch 자체는 별도 프로세스라, 그쪽에서 쓰던 VRAM은
+     프로세스 종료 시 자동으로 해제된다.)
+    """
+    try:
+        if torch.cuda.is_available():
+            print("[INFO] GPU 메모리 초기화: torch.cuda.empty_cache() 실행")
+            torch.cuda.empty_cache()
+            try:
+                # 일부 환경에서 shared memory 핸들도 정리
+                torch.cuda.ipc_collect()
+            except Exception:
+                pass
+        else:
+            print("[INFO] CUDA 장치가 없어 GPU 초기화는 건너뜁니다.")
+    except Exception as e:
+        print(f"[WARN] GPU 메모리 초기화 중 예외 발생: {e}")
+
+    # 파이썬 객체 GC
+    gc.collect()
+    print("[INFO] Python GC 실행 완료")
+
+
 # =====================================================================
 # === STEP 2: PepMLM (ESM-2) 기반 펩타이드 생성 =======================
 # =====================================================================
@@ -368,21 +413,32 @@ def prepare_colabfold_batch_csv(temp_dir: Path, target_sequence: str, peptides) 
     return csv_path
 
 
-def run_colabfold_batch_with_progress(csv_path: Path, out_dir: Path, total_complexes: int):
+def run_colabfold_batch_with_progress(
+    csv_path: Path,
+    out_dir: Path,
+    total_complexes: int,
+    max_msa: str = COLABFOLD_MAX_MSA,
+    max_idle_min: int = COLABFOLD_MAX_IDLE_MIN,
+    max_total_min: int = COLABFOLD_MAX_TOTAL_MIN,
+):
     """
     colabfold_batch 실행 + 진행 상황 출력:
+    - 기본은 GPU로 시도
+    - GPU에서 RESOURCE_EXHAUSTED / Out of memory 발생 시,
+      한 번에 한해 CPU(JAX_PLATFORM_NAME=cpu, CUDA_VISIBLE_DEVICES='')로 재시도
+
+    진행 상황:
     - rank_001*.pdb 개수를 주기적으로 세어
-    - "완료된 구조 개수 / 전체 복합체 개수" 형태로 출력
+      "완료된 구조 개수 / 전체 복합체 개수" 형태로 출력
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    log_file = out_dir / "colabfold_batch.log"
 
     cmd = [
         COLABFOLD_CMD,
         "--num-recycle", "1",
         "--model-type", "alphafold2_multimer_v3",
         "--rank", "ptm",
-        "--max-msa", "32:128",
+        "--max-msa", max_msa,
         "--num-models", "1",
         "--stop-at-score", "0.5",
         str(csv_path),
@@ -394,40 +450,169 @@ def run_colabfold_batch_with_progress(csv_path: Path, out_dir: Path, total_compl
     print("=" * 80)
     print("[INFO] 실행 명령어:")
     print(" ", " ".join(cmd))
-    print(f"[INFO] 로그 파일: {log_file}")
 
-    with open(log_file, "w") as lf:
-        proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT)
+    # ColabFold 시작 전에 현재 프로세스에서 잡고 있는 GPU 메모리를 최대한 비워둔다.
+    clear_gpu_memory()
 
-    last_done = -1
-    while True:
-        ret = proc.poll()
+    def _run_on_device(device_label: str, extra_env: dict | None, log_name: str):
+        """
+        실제로 colabfold_batch 를 한 번 실행하는 내부 함수.
+        - device_label: 'GPU' 또는 'CPU' 등의 표시용 문자열
+        - extra_env   : 특정 디바이스에서만 쓰고 싶은 환경변수 dict
+        - log_name    : 로그 파일 이름
+        """
+        log_file = out_dir / log_name
+        print(f"[INFO] ColabFold {device_label} 모드 실행")
+        print(f"[INFO] 로그 파일: {log_file}")
 
-        rank1_files = list(out_dir.glob("*rank_001*.*pdb"))
-        done = len(rank1_files)
-        if done != last_done:
-            print(f"\r[ColabFold 진행 상황] {done}/{total_complexes} 구조 완료", end="", flush=True)
-            last_done = done
+        env = os.environ.copy()
+        # 안전하게 XLA 메모리 설정 보장
+        env.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+        env.setdefault(
+            "XLA_PYTHON_CLIENT_MEM_FRACTION",
+            os.environ.get("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.8"),
+        )
+        if extra_env:
+            env.update(extra_env)
 
-        if ret is not None:
-            break
-        time.sleep(30)
+        # colabfold_batch 실행
+        with open(log_file, "w") as lf:
+            proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, env=env)
 
-    print()
-    if proc.returncode != 0:
-        print(f"[ERROR] ColabFold 실행 실패 (returncode={proc.returncode}). 마지막 40줄 로그:")
+        start_time = time.time()
+        last_done = -1
+        last_progress_time = start_time
+
+        # 진행 상황 모니터링 루프
+        while True:
+            ret = proc.poll()
+
+            rank1_files = list(out_dir.glob("*rank_001*.*pdb"))
+            done = len(rank1_files)
+            if done != last_done:
+                print(
+                    f"\r[ColabFold 진행 상황({device_label})] {done}/{total_complexes} 구조 완료",
+                    end="",
+                    flush=True,
+                )
+                last_done = done
+                last_progress_time = time.time()
+
+            now = time.time()
+
+            # 1) idle timeout: 진행률이 너무 오래 안 변하면 강제 종료
+            if (now - last_progress_time) > max_idle_min * 60:
+                print(
+                    f"\n[ERROR] ColabFold({device_label})가 {max_idle_min}분 동안 "
+                    "진행률이 변하지 않아 강제 중단합니다 (메모리 부족 또는 내부 오류 가능성)."
+                )
+                proc.terminate()
+                try:
+                    proc.wait(timeout=60)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                print(f"[INFO] 강제 종료 후 ColabFold 로그를 확인하세요: {log_file}")
+                raise RuntimeError(
+                    f"ColabFold({device_label}) 강제 종료 (idle timeout {max_idle_min}분 초과). "
+                    f"로그: {log_file}"
+                )
+
+            # 2) 전체 실행 시간 상한 초과 시 강제 종료
+            if (now - start_time) > max_total_min * 60:
+                print(
+                    f"\n[ERROR] ColabFold({device_label}) 전체 실행 시간이 "
+                    f"{max_total_min}분을 넘어 강제 중단합니다."
+                )
+                proc.terminate()
+                try:
+                    proc.wait(timeout=60)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                print(f"[INFO] 강제 종료 후 ColabFold 로그를 확인하세요: {log_file}")
+                raise RuntimeError(
+                    f"ColabFold({device_label}) 강제 종료 (total timeout {max_total_min}분 초과). "
+                    f"로그: {log_file}"
+                )
+
+            if ret is not None:
+                break
+
+            time.sleep(30)
+
+        print()
+        if proc.returncode != 0:
+            print(
+                f"[ERROR] ColabFold({device_label}) 실행 실패 "
+                f"(returncode={proc.returncode}). 마지막 40줄 로그:"
+            )
+            try:
+                with open(log_file) as f:
+                    lines = f.readlines()
+                tail_lines = lines[-40:]
+                for line in tail_lines:
+                    print(line.rstrip())
+            except Exception as e:
+                print(f"[WARN] 로그 파일을 읽는 중 오류 발생: {e}")
+            raise RuntimeError(
+                f"ColabFold({device_label}) 실행 실패, 로그 확인: {log_file}"
+            )
+
+        rank1_files = sorted(out_dir.glob("*rank_001*.*pdb"))
+        print(f"[INFO] ColabFold({device_label}) 실행 완료")
+        print(f"[INFO] rank_001 PDB 개수: {len(rank1_files)}")
+        return rank1_files
+
+    # 1차 시도: GPU 모드
+    try:
+        rank1_files = _run_on_device("GPU", extra_env=None, log_name="colabfold_batch.log")
+    except RuntimeError:
+        # GPU 모드에서 실패했을 때만 CPU fallback 고려
+        if not COLABFOLD_CPU_FALLBACK:
+            raise
+
+        gpu_log_file = out_dir / "colabfold_batch.log"
+        tail_text = ""
         try:
-            with open(log_file) as f:
+            with open(gpu_log_file) as f:
                 lines = f.readlines()
-            for line in lines[-40:]:
-                print(line.rstrip())
-        except Exception as e:
-            print(f"[WARN] 로그 파일을 읽는 중 오류 발생: {e}")
-        raise RuntimeError(f"ColabFold 실행 실패, 로그 확인: {log_file}")
+            tail_text = "".join(lines[-80:])
+        except Exception:
+            pass
 
-    print("[INFO] ColabFold 실행 완료")
-    rank1_files = sorted(out_dir.glob("*rank_001*.*pdb"))
-    print(f"[INFO] rank_001 PDB 개수: {len(rank1_files)}")
+        # OOM 관련 키워드가 로그에 있는지 확인
+        oom_keywords = (
+            "RESOURCE_EXHAUSTED",
+            "Out of memory",
+            "out of memory",
+            "CUDA_ERROR_OUT_OF_MEMORY",
+        )
+        is_oom = any(k in tail_text for k in oom_keywords)
+
+        if is_oom:
+            print("\n[WARN] GPU 메모리 부족(OOM)으로 ColabFold 실행 실패를 감지했습니다.")
+            print("       CPU 모드(JAX_PLATFORMS=cpu, CUDA_VISIBLE_DEVICES='')로 한 번 더 재시도합니다.")
+            cpu_env = {
+                # GPU 완전 비활성화
+                "CUDA_VISIBLE_DEVICES": "",
+                # 새 JAX 버전용 (로그에서 직접 요구하던 설정)
+                "JAX_PLATFORMS": "cpu",
+                # 구버전 JAX 호환용 (혹시라도 쓰고 있을 수도 있어서 같이 넣어줌)
+                "JAX_PLATFORM_NAME": "cpu",
+            }
+            # CPU 모드는 별도 로그 파일 이름 사용
+            rank1_files = _run_on_device(
+                "CPU",
+                extra_env=cpu_env,
+                log_name="colabfold_batch_cpu.log",
+            )
+        else:
+            # OOM이 아닌 다른 이유라면 그대로 에러 전파
+            raise
+
+
+    # ColabFold 실행 후에도 혹시 남아 있을 수 있는 캐시 한 번 더 정리
+    clear_gpu_memory()
+
     return rank1_files
 
 
@@ -965,20 +1150,22 @@ def run_plip_on_rank1(rank1_pdbs, plip_dir: Path):
         base = pdb.stem
         out_subdir = plip_dir / base
         out_subdir.mkdir(exist_ok=True)
-        cmd = f"{PLIP_CMD} -f {pdb} -o {out_subdir} -x -t"
-        print(f"[RUN] {cmd}")
+
         log_file = out_subdir / f"{base}_plip.log"
 
-        # 체인 구성 파악 (이미 get_chain_residue_counts, auto_assign_receptor_ligand 함수 있음)
+        # 체인 구성 파악
         chain_counts = get_chain_residue_counts(pdb)
         rec_chain, lig_chain = auto_assign_receptor_ligand(chain_counts, prefer_receptor="A")
 
         if rec_chain is None or lig_chain is None:
-            # Vina 때처럼 스킵 처리
-            ...
+            status = "스킵: PLIP용 리간드 체인 자동 탐지 실패"
+            msg = f"{status}\nchains={chain_counts}\n"
+            log_file.write_text(msg, encoding="utf-8")
+            print(f"[WARN] {pdb.name} {status}")
+            debug_lines.append(f"{base}\t{status}\tlog={log_file.name}")
             continue
 
-        chains_expr = f"[['{rec_chain}'], ['{lig_chain}']]"  # 예: [['A'], ['B']]
+        chains_expr = f"[['{rec_chain}'], ['{lig_chain}']]"
 
         cmd_list = [
             *PLIP_CMD.split(),
@@ -987,6 +1174,7 @@ def run_plip_on_rank1(rank1_pdbs, plip_dir: Path):
             "-x", "-t",
             "--chains", chains_expr,
         ]
+        print("[RUN]", " ".join(cmd_list))
 
         result = subprocess.run(cmd_list, capture_output=True, text=True)
 
@@ -1048,10 +1236,27 @@ def run_prodigy_on_rank1(rank1_pdbs, out_dir: Path) -> pd.DataFrame:
         out_txt = out_dir / f"{complex_name}_prodigy.txt"
         err_txt = out_dir / f"{complex_name}_prodigy.stderr.txt"
 
+        # 체인 구성 파악
+        chain_counts = get_chain_residue_counts(pdb_path)
+        rec_chain, lig_chain = auto_assign_receptor_ligand(chain_counts, prefer_receptor="A")
+
+        if rec_chain is None or lig_chain is None:
+            status = "스킵: PRODIGY용 리간드 체인 자동 탐지 실패"
+            records.append({
+                "complex": complex_name,
+                "PRODIGY_status": status,
+                "PRODIGY_dG": None,
+            })
+            debug_lines.append(f"{complex_name}\t{status}\tNone")
+            msg = f"{status}\nchains={chain_counts}\n"
+            out_txt.write_text(msg, encoding="utf-8")
+            err_txt.write_text("", encoding="utf-8")
+            continue
+
         cmd = [
             *PRODIGY_SCRIPT.split(),
             str(pdb_path),
-            "--selection", "A", "B",
+            "--selection", rec_chain, lig_chain,
         ]
         print(f"[RUN] {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -1722,6 +1927,14 @@ def main():
     pep_fasta = write_peptide_fasta(folders["fasta"], peptides)
     print(f"✔️ PepMLM 결과 저장: {pep_fasta}")
 
+    # ESM 모델은 이후 사용하지 않으므로 메모리에서 제거 + GPU 캐시 정리
+    try:
+        del model
+        del tokenizer
+    except NameError:
+        pass
+    clear_gpu_memory()
+
     # 4) ColabFold 구조 예측
     rank1_pdbs = []
     if RUN_COLABFOLD and peptides:
@@ -1730,13 +1943,19 @@ def main():
             target_seq,
             peptides,
         )
-        rank1_pdbs = run_colabfold_batch_with_progress(
-            csv_path,
-            folders["colabfold_out"],
-            total_complexes=len(peptides),
-        )
+        try:
+            rank1_pdbs = run_colabfold_batch_with_progress(
+                csv_path,
+                folders["colabfold_out"],
+                total_complexes=len(peptides),
+            )
+        except RuntimeError as e:
+            print("\n[ERROR] ColabFold 단계에서 오류가 발생하여 파이프라인을 중단합니다.")
+            print("       메시지:", e)
+            return
     else:
         print("\n[INFO] RUN_COLABFOLD=False 또는 펩타이드 없음 → ColabFold 단계 스킵")
+
 
     # 5) Vina / PLIP / PRODIGY
     if RUN_VINA:
