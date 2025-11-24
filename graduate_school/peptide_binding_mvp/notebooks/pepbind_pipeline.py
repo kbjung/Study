@@ -35,12 +35,14 @@ import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModelForMaskedLM
 from Bio.PDB import PDBParser
 # from Bio.PDB import PDBIO, Select
+
 from openpyxl import Workbook
 import pandas as pd
 import numpy as np
 
 import xml.etree.ElementTree as ET
 from collections import defaultdict
+import math
 
 START_TIME = datetime.now()
 
@@ -134,21 +136,53 @@ FINAL_TABLE_HEADERS = [
     "complex_pdb",
     "AlphaFold_status",
     "FinalScore",
-    "PRODIGY_dG(kcal/mol)",
     "PRODIGY_status",
-    "Vina_score(kcal/mol)",
+    "PRODIGY_dG(kcal/mol)",
     "Vina_status",
+    "Vina_score(kcal/mol)",
+    "PLIP_status",
     "PLIP_total_interactions",
     "PLIP_hbond",
     "PLIP_hydrophobic",
     "PLIP_saltbridge",
-    "PLIP_status",
     "ipTM",
 ]
 
 
 def timestamp():
     return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def format_elapsed(start: datetime, end: datetime) -> str:
+    """두 시각 차이를 '00일 00시간 00분 00초' 형식 문자열로 변환."""
+    elapsed = end - start
+    total_seconds = int(elapsed.total_seconds())
+
+    days = total_seconds // (24 * 3600)
+    total_seconds %= (24 * 3600)
+    hours = total_seconds // 3600
+    total_seconds %= 3600
+    minutes = total_seconds // 60
+    seconds = total_seconds % 60
+
+    parts = []
+    if days > 0:
+        parts.append(f"{days:02d}일")
+    if days > 0 or hours > 0:
+        parts.append(f"{hours:02d}시간")
+    parts.append(f"{minutes:02d}분")
+    parts.append(f"{seconds:02d}초")
+    return " ".join(parts)
+
+
+def print_step_timing(step_label: str, start: datetime, end: datetime):
+    """각 스텝의 시작/종료/소요 시간을 출력."""
+    print("\n" + "-" * 80)
+    print(f"[STEP TIMER] {step_label}")
+    print(f"  시작: {start.strftime('%Y.%m.%d %H:%M:%S')}")
+    print(f"  종료: {end.strftime('%Y.%m.%d %H:%M:%S')}")
+    print(f"  소요 시간: {format_elapsed(start, end)}")
+    print("-" * 80)
 
 
 def init_workspace():
@@ -330,10 +364,12 @@ def generate_peptides_with_mlm(
 
     with torch.no_grad():
         attempt = 0
+        # 최대 num_peptides 개까지만 생성
         while len(peptides) < num_peptides and attempt < num_peptides * 5:
             attempt += 1
             ids = input_ids.clone()
 
+            # 모든 [MASK] 위치를 순서대로 하나씩 채움
             for pos in range(ids.size(1)):
                 if ids[0, pos].item() == tokenizer.mask_token_id:
                     outputs = model(ids)
@@ -352,24 +388,25 @@ def generate_peptides_with_mlm(
                     sampled_id = top_idx[sampled_local]
                     ids[0, pos] = sampled_id
 
-                seq = tokenizer.decode(ids[0], skip_special_tokens=True).replace(" ", "")
-                pep = seq[-peptide_len:]
+            # 마스크를 모두 채운 뒤에 한 번만 디코딩
+            seq = tokenizer.decode(ids[0], skip_special_tokens=True).replace(" ", "")
+            pep = seq[-peptide_len:]
 
-                if len(pep) != peptide_len:
-                    continue
+            if len(pep) != peptide_len:
+                continue
 
-                # 표준 20개 아미노산만 허용 (X, B, Z, U, O, J 등은 버리기)
-                allowed_aas = set("ACDEFGHIKLMNPQRSTVWY")
-                if any(a not in allowed_aas for a in pep):
-                    # print(f"  [skip] 비표준 아미노산 포함 → {pep}")
-                    continue
+            # 표준 20개 아미노산만 허용 (X, B, Z, U, O, J 등은 버리기)
+            allowed_aas = set("ACDEFGHIKLMNPQRSTVWY")
+            if any(a not in allowed_aas for a in pep):
+                # print(f"  [skip] 비표준 아미노산 포함 → {pep}")
+                continue
 
-                if pep in seen:
-                    continue
+            if pep in seen:
+                continue
 
-                seen.add(pep)
-                peptides.append(pep)
-                print(f"  [{len(peptides)}/{num_peptides}] 생성 완료: {pep} (길이: {len(pep)})")
+            seen.add(pep)
+            peptides.append(pep)
+            print(f"  [{len(peptides)}/{num_peptides}] 생성 완료: {pep} (길이: {len(pep)})")
 
 
     print("\n--- 생성된 펩타이드 후보 목록 ---")
@@ -1388,10 +1425,15 @@ def load_vina_scores(vina_dir: Path):
             continue
 
         val = row.get("vina_score")
-        try:
-            scores[base] = float(val)
-        except (TypeError, ValueError):
+
+        # NaN 은 None 으로 간주
+        if pd.isna(val):
             scores[base] = None
+        else:
+            try:
+                scores[base] = float(val)
+            except (TypeError, ValueError):
+                scores[base] = None
 
         if has_status:
             s = row.get("vina_status")
@@ -1447,10 +1489,15 @@ def load_prodigy_scores(prodigy_dir: Path):
                 continue
 
             val = row.get(val_col) if val_col is not None else None
-            try:
-                scores[comp] = float(val)
-            except (TypeError, ValueError):
+
+            # NaN → None
+            if val is None or pd.isna(val):
                 scores[comp] = None
+            else:
+                try:
+                    scores[comp] = float(val)
+                except (TypeError, ValueError):
+                    scores[comp] = None
 
             if status_col is not None:
                 s = row.get(status_col)
@@ -1737,30 +1784,67 @@ def load_plip_scores(plip_dir: Path):
     return metrics, statuses
 
 
-def minmax_norm(value_dict, higher_is_better=True):
+# 각 평가 모델별 점수 범위 (고정 스케일링용)
+# 필요하면 나중에 실제 데이터 분포를 보고 조정하면 됨.
+PRODIGY_DG_RANGE   = (-20.0, 0.0)   # ΔG: -20 (강한 결합) ~ 0 (거의 결합 없음)
+VINA_SCORE_RANGE   = (-15.0, 0.0)   # Vina affinity: -15 ~ 0
+PLIP_TOTAL_RANGE   = (0.0, 20.0)    # PLIP total interactions: 0 ~ 20
+IPTM_RANGE         = (0.0, 1.0)     # ipTM: 0 ~ 1
+
+def fixed_range_norm(value_dict, vmin, vmax, higher_is_better=True):
     """
-    dict(base -> value) 형태를 받아 0~1 범위로 min-max 정규화.
-    higher_is_better=True  이면 값이 클수록 1에 가깝게,
-    higher_is_better=False 이면 값이 작을수록(에너지가 더 낮을수록) 1에 가깝게.
+    dict(base -> value)를 고정된 [vmin, vmax] 구간 기준으로 0~1로 스케일링.
+
+    - 값이 범위를 벗어나면 vmin/vmax로 clip
+    - higher_is_better=True  이면 값이 클수록 1에 가깝게
+    - higher_is_better=False 이면 값이 작을수록(에너지가 더 낮을수록) 1에 가깝게
     """
-    vals = [v for v in value_dict.values() if v is not None]
-    if not vals:
+    if vmin == vmax:
         return {}
 
-    vmin, vmax = min(vals), max(vals)
-    if abs(vmax - vmin) < 1e-8:
-        return {k: 1.0 for k, v in value_dict.items() if v is not None}
+    # vmin, vmax가 뒤집혀 있으면 정리
+    if vmin > vmax:
+        vmin, vmax = vmax, vmin
 
     out = {}
     for k, v in value_dict.items():
         if v is None:
             continue
+
+        # 고정 범위로 클리핑
+        x = max(min(v, vmax), vmin)
+
         if higher_is_better:
-            s = (v - vmin) / (vmax - vmin)
+            # vmin → 0, vmax → 1
+            s = (x - vmin) / (vmax - vmin)
         else:
-            s = (vmax - v) / (vmax - vmin)
+            # vmin → 1, vmax → 0  (작을수록/더 음수일수록 좋음)
+            s = (vmax - x) / (vmax - vmin)
+
         out[k] = s
+
     return out
+
+
+def is_status_ok(status: str) -> bool:
+    """
+    상태 문자열이 '정상', '정상(txt/log)' 같은 정상 케이스인지 판별.
+    """
+    if not isinstance(status, str):
+        return False
+    return status.strip().startswith("정상")
+
+
+def has_valid_value(v) -> bool:
+    """
+    값이 None/NaN 이 아닌 실제 숫자인지 판별.
+    - 0.0 은 유효한 값으로 인정.
+    """
+    if v is None:
+        return False
+    if isinstance(v, (float, int)) and math.isnan(v):
+        return False
+    return True
 
 
 def build_and_save_final_table(folders, peptides, rank1_pdbs):
@@ -1793,11 +1877,31 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
     # PLIP total 값만 따로 dict로 추출
     plip_total_vals = {b: d.get("total") for b, d in plip_metrics.items()}
 
-    # 0~1 정규화
-    iptm_norm    = minmax_norm(iptm_vals, higher_is_better=True)
-    vina_norm    = minmax_norm(vina_vals, higher_is_better=False)
-    prodigy_norm = minmax_norm(prodigy_vals, higher_is_better=False)
-    plip_norm    = minmax_norm(plip_total_vals, higher_is_better=True)
+    # 고정 범위(물리적 의미 기반) 스케일링
+    iptm_norm = fixed_range_norm(
+        iptm_vals,
+        IPTM_RANGE[0],
+        IPTM_RANGE[1],
+        higher_is_better=True,   # ipTM은 클수록 좋음
+    )
+    vina_norm = fixed_range_norm(
+        vina_vals,
+        VINA_SCORE_RANGE[0],
+        VINA_SCORE_RANGE[1],
+        higher_is_better=False,  # 에너지는 더 음수일수록 좋음
+    )
+    prodigy_norm = fixed_range_norm(
+        prodigy_vals,
+        PRODIGY_DG_RANGE[0],
+        PRODIGY_DG_RANGE[1],
+        higher_is_better=False,  # ΔG도 더 음수일수록 좋음
+    )
+    plip_norm = fixed_range_norm(
+        plip_total_vals,
+        PLIP_TOTAL_RANGE[0],
+        PLIP_TOTAL_RANGE[1],
+        higher_is_better=True,   # 상호작용 개수는 많을수록 좋음
+    )
 
     # candidate_id → peptide 매핑 (complex_0, complex_1 ...)
     id_to_pep = {f"complex_{i}": pep for i, pep in enumerate(peptides)}
@@ -1825,15 +1929,27 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
         else:
             alphafold_status = "정상(단백질-펩타이드 복합체)"
 
+        # 이 complex의 status 문자열 가져오기
+        vina_st    = vina_status.get(base, "미기록")
+        prodigy_st = prodigy_status.get(base, "미기록")
+        plip_st    = plip_status.get(base, "미기록")
+
+        # status + 값 유효성 체크
+        vina_ok    = is_status_ok(vina_st)    and has_valid_value(vina)
+        prodigy_ok = is_status_ok(prodigy_st) and has_valid_value(prodigy)
+        plip_ok    = is_status_ok(plip_st)    and has_valid_value(plip_total)
+
         # 가중치
         w_prodigy = 0.35
         w_vina    = 0.20
         w_plip    = 0.25
         w_iptm    = 0.20
 
-        # 정규화된 점수 조합
-        if len(chain_counts) == 1:
-            # 단일체 구조 → 결합 복합체로 신뢰하기 어려우므로 최종 점수는 계산하지 않음
+        # 최종 점수 계산 조건:
+        #  - 단일체가 아니고
+        #  - Vina / PLIP / PRODIGY status가 모두 정상이고
+        #  - 해당 값이 실제로 존재할 때만 계산
+        if (len(chain_counts) == 1) or not (vina_ok and plip_ok and prodigy_ok):
             final_score = None
         else:
             final_score = (
@@ -1850,16 +1966,17 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
             "alphafold_status": alphafold_status,
             "final_score":      final_score,
             "prodigy_dG":       prodigy,
-            "prodigy_status":   prodigy_status.get(base, "미기록"),
+            "prodigy_status":   prodigy_st,
             "vina_score":       vina,
-            "vina_status":      vina_status.get(base, "미기록"),
+            "vina_status":      vina_st,
             "plip_total":       plip_total,
             "plip_hbond":       plip_hbond,
             "plip_hphob":       plip_hphob,
             "plip_salt":        plip_salt,
-            "plip_status":      plip_status.get(base, "미기록"),
+            "plip_status":      plip_st,
             "iptm":             iptm,
         })
+
 
     # FinalScore 기준으로 내림차순 정렬
     # - final_score가 None 인 경우는 가장 아래로 보내고
@@ -1914,16 +2031,24 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
 # =====================================================================
 
 def main():
-    # 1) 워크스페이스 생성
-    folders = init_workspace()
+    # 전체 파이프라인 시작 시간
+    global START_TIME
+    START_TIME = datetime.now()
 
-    # 2) 타깃 서열 FASTA 저장
+    # STEP 1: 워크스페이스/폴더 구조 생성
+    step1_start = datetime.now()
+    folders = init_workspace()
+    step1_end = datetime.now()
+    print_step_timing("STEP 1: 워크스페이스 / 폴더 구조 생성", step1_start, step1_end)
+
+    # STEP 2: 타깃 FASTA + PepMLM 기반 펩타이드 생성
+    step2_start = datetime.now()
+
     target_seq = TARGET_SEQUENCE.strip()
     target_fasta = write_target_fasta(folders["fasta"], target_seq)
     print(f"✔️ 타깃 단백질 길이: {len(target_seq)}")
     print(f"✔️ 타깃 FASTA: {target_fasta}")
 
-    # 3) PepMLM(ESM-2) 기반 펩타이드 생성
     tokenizer, model = load_esm_mlm()
     peptides = generate_peptides_with_mlm(
         tokenizer,
@@ -1943,9 +2068,13 @@ def main():
         pass
     clear_gpu_memory()
 
-    # 4) ColabFold 구조 예측
+    step2_end = datetime.now()
+    print_step_timing("STEP 2: PepMLM 기반 펩타이드 생성", step2_start, step2_end)
+
+    # STEP 3: ColabFold 구조 예측
     rank1_pdbs = []
     if RUN_COLABFOLD and peptides:
+        step3_start = datetime.now()
         csv_path = prepare_colabfold_batch_csv(
             folders["temp"],
             target_seq,
@@ -1958,30 +2087,53 @@ def main():
                 total_complexes=len(peptides),
             )
         except RuntimeError as e:
+            step3_end = datetime.now()
+            print_step_timing("STEP 3: ColabFold 구조 예측 (실패)", step3_start, step3_end)
             print("\n[ERROR] ColabFold 단계에서 오류가 발생하여 파이프라인을 중단합니다.")
             print("       메시지:", e)
             return
+        step3_end = datetime.now()
+        print_step_timing("STEP 3: ColabFold 구조 예측", step3_start, step3_end)
     else:
+        now = datetime.now()
         print("\n[INFO] RUN_COLABFOLD=False 또는 펩타이드 없음 → ColabFold 단계 스킵")
+        print_step_timing("STEP 3: ColabFold 구조 예측 (스킵)", now, now)
 
-
-    # 5) Vina / PLIP / PRODIGY
+    # STEP 4: Vina
     if RUN_VINA:
+        step4_start = datetime.now()
         run_vina_on_rank1(rank1_pdbs, folders["vina"])
+        step4_end = datetime.now()
+        print_step_timing("STEP 4: AutoDock Vina 도킹", step4_start, step4_end)
     else:
+        now = datetime.now()
         print("\n[INFO] RUN_VINA=False → Vina 단계 스킵")
+        print_step_timing("STEP 4: AutoDock Vina 도킹 (스킵)", now, now)
 
+    # STEP 5: PLIP
     if RUN_PLIP:
+        step5_start = datetime.now()
         run_plip_on_rank1(rank1_pdbs, folders["plip"])
+        step5_end = datetime.now()
+        print_step_timing("STEP 5: PLIP 상호작용 분석", step5_start, step5_end)
     else:
-        print("[INFO] RUN_PLIP=False → PLIP 단계 스킵")
+        now = datetime.now()
+        print("\n[INFO] RUN_PLIP=False → PLIP 단계 스킵")
+        print_step_timing("STEP 5: PLIP 상호작용 분석 (스킵)", now, now)
 
+    # STEP 6: PRODIGY
     if RUN_PRODIGY:
+        step6_start = datetime.now()
         run_prodigy_on_rank1(rank1_pdbs, folders["prodigy"])
+        step6_end = datetime.now()
+        print_step_timing("STEP 6: PRODIGY 결합 친화도 평가", step6_start, step6_end)
     else:
-        print("[INFO] RUN_PRODIGY=False → PRODIGY 단계 스킵")
+        now = datetime.now()
+        print("\n[INFO] RUN_PRODIGY=False → PRODIGY 단계 스킵")
+        print_step_timing("STEP 6: PRODIGY 결합 친화도 평가 (스킵)", now, now)
 
-    # 6) rank_001 PDB zip 압축 + A안 최종 엑셀
+    # STEP 7: rank_001 PDB zip + 최종 엑셀
+    step7_start = datetime.now()
     pdb_zip = None
     final_xlsx = None
     if rank1_pdbs:
@@ -1989,33 +2141,11 @@ def main():
         final_xlsx = build_and_save_final_table(folders, peptides, rank1_pdbs)
     else:
         print("[INFO] rank_001 PDB가 없어 zip/엑셀 생성을 생략합니다.")
+    step7_end = datetime.now()
+    print_step_timing("STEP 7: 결과 zip / 최종 엑셀 생성", step7_start, step7_end)
 
-    # 종료 시간 및 소요 시간 계산
+    # 전체 파이프라인 종료 시간 및 소요 시간
     END_TIME = datetime.now()
-
-    start_str = START_TIME.strftime("%Y.%m.%d %H:%M:%S")
-    end_str   = END_TIME.strftime("%Y.%m.%d %H:%M:%S")
-
-    elapsed = END_TIME - START_TIME
-    total_seconds = int(elapsed.total_seconds())
-
-    days = total_seconds // (24 * 3600)
-    total_seconds %= (24 * 3600)
-    hours = total_seconds // 3600
-    total_seconds %= 3600
-    minutes = total_seconds // 60
-    seconds = total_seconds % 60
-
-    # "00일 00시간 00분 00초" 형태에서
-    # 일/시간은 0이면 생략
-    parts = []
-    if days > 0:
-        parts.append(f"{days:02d}일")
-    if days > 0 or hours > 0:
-        parts.append(f"{hours:02d}시간")
-    parts.append(f"{minutes:02d}분")
-    parts.append(f"{seconds:02d}초")
-    elapsed_str = " ".join(parts)
 
     print("\n" + "=" * 80)
     print("🎉 파이프라인 실행 종료")
@@ -2025,9 +2155,9 @@ def main():
         print(f"[INFO] PDB zip: {pdb_zip}")
     if final_xlsx:
         print(f"[INFO] 최종 엑셀: {final_xlsx}")
-    print(f"[INFO] 시작 시간: {start_str}")
-    print(f"[INFO] 종료 시간: {end_str}")
-    print(f"[INFO] 총 소요 시간: {elapsed_str}")
+    print(f"[INFO] 시작 시간: {START_TIME.strftime('%Y.%m.%d %H:%M:%S')}")
+    print(f"[INFO] 종료 시간: {END_TIME.strftime('%Y.%m.%d %H:%M:%S')}")
+    print(f"[INFO] 총 소요 시간: {format_elapsed(START_TIME, END_TIME)}")
     print("=" * 80)
 
 
