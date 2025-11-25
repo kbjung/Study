@@ -327,8 +327,8 @@ def generate_peptides_with_mlm(
     target_sequence: str,
     num_peptides: int = NUM_PEPTIDES,
     peptide_len: int = PEPTIDE_LENGTH,
-    top_k: int = 10,
-    temperature: float = 1.0,
+    top_k: int = 10, # default 10
+    temperature: float = 1.0, # default 1.0
 ):
     """
     PepMLM(ESM-2) 기반 펩타이드 생성 (샘플링 버전)
@@ -337,6 +337,24 @@ def generate_peptides_with_mlm(
     - 각 MASK 위치에서 top-k 확률 분포에서 랜덤 샘플링
     - special token (PAD, CLS, SEP, MASK, UNK)는 제외
     - 마지막 peptide_len 글자를 펩타이드로 사용
+
+    top_k와 temperature 개념 요약:
+    - top_k:
+      - 모델이 예측한 아미노산 후보 중, "확률이 높은 상위 k개"만 남기고 나머지는 버린 뒤 샘플링.
+      - k가 클수록: 더 다양한/실험적인 서열이 나옴(낮은 확률 후보도 일부 포함됨).
+      - k가 작을수록: 모델이 가장 그럴듯하다고 보는 아미노산들 위주로 보수적인 서열이 나옴.
+
+    - temperature:
+      - logits를 temperature로 나눠서 확률 분포를 조절하는 파라미터.
+      - 1.0: 원래 분포 그대로 사용(기본값).
+      - < 1.0 (예: 0.7): 분포가 날카로워져서, 높은 확률 토큰이 더 자주 선택됨(더 결정적, 덜 랜덤).
+      - > 1.0 (예: 1.2): 분포가 평탄해져서, 낮은 확률 토큰도 더 자주 선택됨(더 랜덤, 탐색 증가).
+
+    즉,
+    - top_k를 줄이고(예: 10 → 3~5), temperature를 1.0 이하로 낮추면
+      → 모델이 "높게 평가하는" 아미노산 위주로 보수적인 서열 생성.
+    - top_k를 늘리고, temperature를 1.0 이상으로 올리면
+      → 구조/도킹 점수는 들쭉날쭉할 수 있지만, 서열 다양성(탐색)이 크게 증가.
     """
     print("\n펩타이드 서열 생성을 시작합니다...")
 
