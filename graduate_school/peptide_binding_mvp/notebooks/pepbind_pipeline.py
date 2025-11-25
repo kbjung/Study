@@ -12,10 +12,10 @@ pepbind_pipeline.py - WSL/오프라인 환경용 통합 파이프라인 (정리 
 - STEP 7: 최종 평가(A안 가중치) + 엑셀 파일 생성 + rank_001 PDB zip 압축
 
 A안 가중치:
-  PRODIGY 0.35
-  Vina    0.20
-  PLIP    0.25
-  ipTM    0.20
+  PRODIGY 0.50
+  Vina    0.25
+  PLIP    0.15
+  ipTM    0.10
 """
 
 import os
@@ -1958,10 +1958,10 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
         plip_ok    = is_status_ok(plip_st)    and has_valid_value(plip_total)
 
         # 가중치
-        w_prodigy = 0.35
-        w_vina    = 0.20
-        w_plip    = 0.25
-        w_iptm    = 0.20
+        w_prodigy = 0.50
+        w_vina    = 0.25
+        w_plip    = 0.15
+        w_iptm    = 0.10
 
         # 최종 점수 계산 조건:
         #  - 단일체가 아니고
