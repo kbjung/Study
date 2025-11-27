@@ -34,7 +34,6 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModelForMaskedLM
 from Bio.PDB import PDBParser
-# from Bio.PDB import PDBIO, Select
 
 from openpyxl import Workbook
 import pandas as pd
@@ -56,8 +55,8 @@ TARGET_SEQUENCE = (
 )
 
 # 2) 생성할 펩타이드 설정
-NUM_PEPTIDES   = 10   # 생성할 펩타이드 후보 개수
-PEPTIDE_LENGTH = 4    # 각 펩타이드 길이 (아미노산 개수)
+NUM_PEPTIDES   = 100   # 생성할 펩타이드 후보 개수
+PEPTIDE_LENGTH = 10    # 각 펩타이드 길이 (아미노산 개수)
 
 # 3) ColabFold / 평가 단계 사용 여부
 RUN_COLABFOLD  = True   # ColabFold 구조 예측 실행 여부
@@ -328,7 +327,7 @@ def generate_peptides_with_mlm(
     num_peptides: int = NUM_PEPTIDES,
     peptide_len: int = PEPTIDE_LENGTH,
     top_k: int = 10, # default 10
-    temperature: float = 1.0, # default 1.0
+    temperature: float = 0.5, # default 1.0
 ):
     """
     PepMLM(ESM-2) 기반 펩타이드 생성 (샘플링 버전)
