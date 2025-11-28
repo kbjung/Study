@@ -36,14 +36,19 @@ from transformers import AutoTokenizer, AutoModelForMaskedLM
 from Bio.PDB import PDBParser
 
 from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
 import pandas as pd
 import numpy as np
 
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 import math
+import sys
+
 
 START_TIME = datetime.now()
+END_TIME = None          # 전체 종료시간 저장용
+STEP_TIMINGS = []        # 각 스텝별 시작/종료/소요시간 기록용
 
 # =====================================================================
 # === 사용자 설정 영역: 여기만 수정해서 사용 ==========================
@@ -56,7 +61,7 @@ TARGET_SEQUENCE = (
 
 # 2) 생성할 펩타이드 설정
 NUM_PEPTIDES   = 100   # 생성할 펩타이드 후보 개수
-PEPTIDE_LENGTH = 10    # 각 펩타이드 길이 (아미노산 개수)
+PEPTIDE_LENGTH = 18    # 각 펩타이드 길이 (아미노산 개수)
 
 # 3) ColabFold / 평가 단계 사용 여부
 RUN_COLABFOLD  = True   # ColabFold 구조 예측 실행 여부
@@ -83,12 +88,16 @@ COLABFOLD_MAX_MSA = os.environ.get("COLABFOLD_MAX_MSA", "16:64")
 COLABFOLD_MAX_IDLE_MIN = int(os.environ.get("COLABFOLD_MAX_IDLE_MIN", "30"))   # 예: 30분
 
 # 전체 ColabFold 실행 시간 상한 (분)
-COLABFOLD_MAX_TOTAL_MIN = int(os.environ.get("COLABFOLD_MAX_TOTAL_MIN", "360"))  # 예: 6시간
+COLABFOLD_MAX_TOTAL_MIN = int(os.environ.get("COLABFOLD_MAX_TOTAL_MIN", "1440"))  # 예: 360(6시간)
 
 # GPU에서 OOM(RESOURCE_EXHAUSTED / Out of memory) 나면 CPU로 한 번 더 재시도할지 여부
 COLABFOLD_CPU_FALLBACK = os.environ.get("COLABFOLD_CPU_FALLBACK", "1").lower() not in (
     "0", "false", "no", "off"
 )
+
+# PepMLM 하이퍼파라미터 설정
+PEPMLM_TOP_K = 10 # 예. 후보군 Top10 : 10
+PEPMLM_TEMPERATURE = 1.0 # default 1.0
 
 # =====================================================================
 # === 공통 설정 / 유틸 =================================================
@@ -175,13 +184,26 @@ def format_elapsed(start: datetime, end: datetime) -> str:
 
 
 def print_step_timing(step_label: str, start: datetime, end: datetime):
-    """각 스텝의 시작/종료/소요 시간을 출력."""
+    """각 스텝의 시작/종료/소요 시간을 출력 + 전역 리스트에 저장."""
+    elapsed_str = format_elapsed(start, end)
+
     print("\n" + "-" * 80)
     print(f"[STEP TIMER] {step_label}")
     print(f"  시작: {start.strftime('%Y.%m.%d %H:%M:%S')}")
     print(f"  종료: {end.strftime('%Y.%m.%d %H:%M:%S')}")
-    print(f"  소요 시간: {format_elapsed(start, end)}")
+    print(f"  소요 시간: {elapsed_str}")
     print("-" * 80)
+
+    # 전역 리스트에 기록
+    global STEP_TIMINGS
+    STEP_TIMINGS.append(
+        {
+            "step": step_label,
+            "start": start,
+            "end": end,
+            "elapsed": elapsed_str,
+        }
+    )
 
 
 def init_workspace():
@@ -304,6 +326,93 @@ def clear_gpu_memory():
     print("[INFO] Python GC 실행 완료")
 
 
+class Tee:
+    """
+    sys.stdout / sys.stderr를 여러 스트림(터미널 + 로그 파일)에 동시에 보내기 위한 헬퍼.
+    """
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for s in self.streams:
+            s.write(data)
+        for s in self.streams:
+            s.flush()
+
+    def flush(self):
+        for s in self.streams:
+            s.flush()
+
+
+def setup_logging(log_path: Path):
+    """
+    전체 파이프라인 출력(sys.stdout, sys.stderr)을 터미널 + 로그 파일로 동시에 보내기.
+
+    - log_path: 생성할 로그 파일 경로
+    """
+    # 'w' 로 새로 열고, utf-8로 저장
+    log_file = open(log_path, "w", encoding="utf-8")
+    tee = Tee(sys.stdout, log_file)
+    sys.stdout = tee
+    sys.stderr = tee
+
+    print(f"[LOG] 전체 출력 로그 파일: {log_path}")
+
+
+def print_run_config():
+    """
+    이번 pepbind 실행에 사용된 주요 옵션/환경을 한 번에 출력 (로그에 같이 기록됨).
+    """
+    print("\n" + "=" * 80)
+    print("PEPBIND RUN CONFIG")
+    print("=" * 80)
+    print(f"TARGET_SEQUENCE length: {len(TARGET_SEQUENCE.strip())}")
+    print(f"NUM_PEPTIDES          : {NUM_PEPTIDES}")
+    print(f"PEPTIDE_LENGTH        : {PEPTIDE_LENGTH}")
+    print(f"PepMLM_top_k          : {PEPMLM_TOP_K}")
+    print(f"PepMLM_temperature    : {PEPMLM_TEMPERATURE}")
+    print(f"RUN_COLABFOLD         : {RUN_COLABFOLD}")
+    print(f"RUN_VINA              : {RUN_VINA}")
+    print(f"RUN_PLIP              : {RUN_PLIP}")
+    print(f"RUN_PRODIGY           : {RUN_PRODIGY}")
+    print(f"BASE_DIR              : {BASE_DIR}")
+    print(f"COLABFOLD_CMD         : {COLABFOLD_CMD}")
+    print(f"VINA_CMD              : {VINA_CMD}")
+    print(f"PLIP_CMD              : {PLIP_CMD}")
+    print(f"PRODIGY_SCRIPT        : {PRODIGY_SCRIPT}")
+    print(f"OBABEL_CMD            : {OBABEL_CMD}")
+    print(f"COLABFOLD_MAX_MSA     : {COLABFOLD_MAX_MSA}")
+    print(f"COLABFOLD_MAX_IDLE_MIN: {COLABFOLD_MAX_IDLE_MIN}")
+    print(f"COLABFOLD_MAX_TOTAL_MIN: {COLABFOLD_MAX_TOTAL_MIN}")
+    print(f"COLABFOLD_CPU_FALLBACK: {COLABFOLD_CPU_FALLBACK}")
+    print(f"PyTorch DEVICE        : {DEVICE}")
+    print("=" * 80 + "\n")
+
+
+def autofit_worksheet_columns(ws):
+    """
+    워크시트의 각 열에 대해
+    - 셀 값의 문자열 길이를 기준으로
+    - 열 너비를 대략적으로 자동 조절해주는 함수.
+    """
+    for column_cells in ws.columns:
+        max_length = 0
+        col_letter = get_column_letter(column_cells[0].column)
+
+        for cell in column_cells:
+            value = cell.value
+            if value is None:
+                continue
+            # 숫자, 날짜 등도 문자열 길이로 변환
+            value_str = str(value)
+            if len(value_str) > max_length:
+                max_length = len(value_str)
+
+        # 여유 공간 조금 더해서 설정 (2~3 정도 여유)
+        if max_length > 0:
+            ws.column_dimensions[col_letter].width = max_length + 2
+
+
 # =====================================================================
 # === STEP 2: PepMLM (ESM-2) 기반 펩타이드 생성 =======================
 # =====================================================================
@@ -327,7 +436,7 @@ def generate_peptides_with_mlm(
     num_peptides: int = NUM_PEPTIDES,
     peptide_len: int = PEPTIDE_LENGTH,
     top_k: int = 10, # default 10
-    temperature: float = 0.5, # default 1.0
+    temperature: float = 1.0, # default 1.0
 ):
     """
     PepMLM(ESM-2) 기반 펩타이드 생성 (샘플링 버전)
@@ -1864,16 +1973,23 @@ def has_valid_value(v) -> bool:
     return True
 
 
-def build_and_save_final_table(folders, peptides, rank1_pdbs):
+def build_and_save_final_table(
+    folders,
+    peptides,
+    rank1_pdbs,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
+    step_timings: list[dict] | None = None,
+):
     """
     ColabFold / Vina / PLIP / PRODIGY / ipTM 결과를 모아서
     A안 가중치로 FinalScore_A를 계산하고 엑셀로 저장.
 
     A안:
-      PRODIGY 0.35  (ΔG, 더 작을수록 좋음)
-      Vina    0.20  (에너지, 더 작을수록 좋음)
-      PLIP    0.25  (총 상호작용 수, 많을수록 좋음)
-      ipTM    0.20  (인터페이스 신뢰도, 높을수록 좋음)
+      PRODIGY 0.50  (ΔG, 더 작을수록 좋음)
+      Vina    0.25  (에너지, 더 작을수록 좋음)
+      PLIP    0.15  (총 상호작용 수, 많을수록 좋음)
+      ipTM    0.10  (인터페이스 신뢰도, 높을수록 좋음)
 
     추가:
       - 각 평가 모델별 status 컬럼을 엑셀에 함께 기록
@@ -2008,7 +2124,7 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
     # 엑셀 작성
     wb = Workbook()
     ws = wb.active
-    ws.title = "pepbind_ranking_A"
+    ws.title = "pepbind_ranking"
 
     headers = FINAL_TABLE_HEADERS
     ws.append(headers)
@@ -2037,6 +2153,57 @@ def build_and_save_final_table(folders, peptides, rank1_pdbs):
         row_vals = [value_map[h](r, idx) for h in headers]
         ws.append(row_vals)
 
+    # ─────────────────────────────────────────────
+    # 두 번째 시트: setting
+    # ─────────────────────────────────────────────
+    ws_setting = wb.create_sheet(title="setting")
+
+    ws_setting.append(["항목", "값"])
+
+    target_len = len(TARGET_SEQUENCE.strip())
+
+    ws_setting.append(["TARGET_SEQUENCE_length", target_len])
+    ws_setting.append(["PEPTIDE_LENGTH", PEPTIDE_LENGTH])
+    ws_setting.append(["NUM_PEPTIDES", NUM_PEPTIDES])
+    ws_setting.append(["PepMLM_temperature", PEPMLM_TEMPERATURE])
+    ws_setting.append(["PepMLM_top_k", PEPMLM_TOP_K])
+
+    if start_time is not None:
+        ws_setting.append(
+            ["code_start_time", start_time.strftime("%Y.%m.%d %H:%M:%S")]
+        )
+    if end_time is not None:
+        ws_setting.append(
+            ["code_end_time", end_time.strftime("%Y.%m.%d %H:%M:%S")]
+        )
+    if start_time is not None and end_time is not None:
+        ws_setting.append(
+            [
+                "code_total_elapsed",
+                format_elapsed(start_time, end_time),
+            ]
+        )
+
+    # 빈 줄 하나
+    ws_setting.append([])
+    # 스텝별 시간 테이블 헤더
+    ws_setting.append(["step_label", "start_time", "end_time", "elapsed"])
+
+    if step_timings:
+        for rec in step_timings:
+            ws_setting.append(
+                [
+                    rec["step"],
+                    rec["start"].strftime("%Y.%m.%d %H:%M:%S"),
+                    rec["end"].strftime("%Y.%m.%d %H:%M:%S"),
+                    rec["elapsed"],
+                ]
+            )
+
+    # 열 너비 자동조절 (랭킹 시트 + setting 시트 둘 다)
+    autofit_worksheet_columns(ws)
+    autofit_worksheet_columns(ws_setting)
+
     out_xlsx = results_dir / f"final_peptide_rank_{timestamp()}.xlsx"
     wb.save(out_xlsx)
     print(f"✅ 최종 결과 엑셀 저장: {out_xlsx}")
@@ -2058,6 +2225,13 @@ def main():
     step1_end = datetime.now()
     print_step_timing("STEP 1: 워크스페이스 / 폴더 구조 생성", step1_start, step1_end)
 
+    # ★ 워크스페이스 안에 로그 파일 생성 + stdout/stderr를 동시에 기록
+    log_path = folders["results"] / f"pepbind_run_{timestamp()}.log"
+    setup_logging(log_path)
+
+    # ★ 이번 실행에 사용된 옵션/환경 요약 출력 (→ 자동으로 로그에도 남음)
+    print_run_config()
+
     # STEP 2: 타깃 FASTA + PepMLM 기반 펩타이드 생성
     step2_start = datetime.now()
 
@@ -2073,6 +2247,8 @@ def main():
         target_seq,
         num_peptides=NUM_PEPTIDES,
         peptide_len=PEPTIDE_LENGTH,
+        top_k=PEPMLM_TOP_K,
+        temperature=PEPMLM_TEMPERATURE,
     )
     pep_fasta = write_peptide_fasta(folders["fasta"], peptides)
     print(f"✔️ PepMLM 결과 저장: {pep_fasta}")
@@ -2153,16 +2329,29 @@ def main():
     step7_start = datetime.now()
     pdb_zip = None
     final_xlsx = None
+
     if rank1_pdbs:
-        pdb_zip   = zip_rank1_pdbs(rank1_pdbs, folders["results"])
-        final_xlsx = build_and_save_final_table(folders, peptides, rank1_pdbs)
+        pdb_zip = zip_rank1_pdbs(rank1_pdbs, folders["results"])
     else:
         print("[INFO] rank_001 PDB가 없어 zip/엑셀 생성을 생략합니다.")
+
     step7_end = datetime.now()
     print_step_timing("STEP 7: 결과 zip / 최종 엑셀 생성", step7_start, step7_end)
 
     # 전체 파이프라인 종료 시간 및 소요 시간
+    global END_TIME
     END_TIME = datetime.now()
+
+    # STEP_TIMINGS / START_TIME / END_TIME 을 포함해서 최종 엑셀 생성
+    if rank1_pdbs:
+        final_xlsx = build_and_save_final_table(
+            folders,
+            peptides,
+            rank1_pdbs,
+            start_time=START_TIME,
+            end_time=END_TIME,
+            step_timings=STEP_TIMINGS,
+        )
 
     print("\n" + "=" * 80)
     print("🎉 파이프라인 실행 종료")
