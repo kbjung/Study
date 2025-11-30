@@ -435,42 +435,44 @@ def generate_peptides_with_mlm(
     target_sequence: str,
     num_peptides: int = NUM_PEPTIDES,
     peptide_len: int = PEPTIDE_LENGTH,
-    top_k: int = 10, # default 10
-    temperature: float = 1.0, # default 1.0
+    top_k: int = 10,  # default 10
+    temperature: float = 1.0,  # default 1.0
 ):
     """
-    PepMLM(ESM-2) 기반 펩타이드 생성 (샘플링 버전)
+    PepMLM(ESM-2 스타일) 기반 펩타이드 생성 (타깃 서열 컨텍스트 사용 버전)
 
-    - "[PEP] [MASK] [MASK] ..." 형태로 입력
-    - 각 MASK 위치에서 top-k 확률 분포에서 랜덤 샘플링
-    - special token (PAD, CLS, SEP, MASK, UNK)는 제외
-    - 마지막 peptide_len 글자를 펩타이드로 사용
+    입력 프롬프트 형태:
+      "[타깃 서열 토큰들] [MASK] [MASK] ... (펩타이드 길이만큼)"
 
-    top_k와 temperature 개념 요약:
-    - top_k:
-      - 모델이 예측한 아미노산 후보 중, "확률이 높은 상위 k개"만 남기고 나머지는 버린 뒤 샘플링.
-      - k가 클수록: 더 다양한/실험적인 서열이 나옴(낮은 확률 후보도 일부 포함됨).
-      - k가 작을수록: 모델이 가장 그럴듯하다고 보는 아미노산들 위주로 보수적인 서열이 나옴.
+    - 타깃 서열은 아미노산 한 글자씩 공백으로 나눈 형태로 토큰화:
+        예) "AFK" -> "A F K"
+    - 그 뒤에 [MASK] 토큰을 peptide_len 개 붙여서,
+      "타깃 C-말단 뒤에 이어지는 펩타이드"를 모델이 채우도록 유도.
 
-    - temperature:
-      - logits를 temperature로 나눠서 확률 분포를 조절하는 파라미터.
-      - 1.0: 원래 분포 그대로 사용(기본값).
-      - < 1.0 (예: 0.7): 분포가 날카로워져서, 높은 확률 토큰이 더 자주 선택됨(더 결정적, 덜 랜덤).
-      - > 1.0 (예: 1.2): 분포가 평탄해져서, 낮은 확률 토큰도 더 자주 선택됨(더 랜덤, 탐색 증가).
+    top_k:
+      - 각 MASK 위치에서 확률 상위 k개 아미노산만 남기고 샘플링.
+      - k 작게 → 모델이 가장 그럴듯하다고 보는 아미노산 위주 (보수적).
+      - k 크게 → 다양한 후보 (탐색적).
 
-    즉,
-    - top_k를 줄이고(예: 10 → 3~5), temperature를 1.0 이하로 낮추면
-      → 모델이 "높게 평가하는" 아미노산 위주로 보수적인 서열 생성.
-    - top_k를 늘리고, temperature를 1.0 이상으로 올리면
-      → 구조/도킹 점수는 들쭉날쭉할 수 있지만, 서열 다양성(탐색)이 크게 증가.
+    temperature:
+      - logits / temperature 후 softmax.
+      - 1.0   → 원래 분포.
+      - < 1.0 → 분포가 날카로워져서 고확률 토큰 위주 (덜 랜덤).
+      - > 1.0 → 분포가 평탄해져서 저확률 토큰도 선택 (더 랜덤).
+
+    이 버전은 이전의 "[PEP] [MASK]..." 프롬프트와 달리
+    타깃 서열 전체를 컨텍스트로 사용하므로,
+    "타깃 단백질과 어울리는 C-말단 확장 서열" 분포에 더 가깝게 생성한다.
     """
-    print("\n펩타이드 서열 생성을 시작합니다...")
 
+    print("\n펩타이드 서열 생성을 시작합니다 (타깃 컨텍스트 사용 버전)...")
+
+    # 1) MASK 토큰 확인
     mask_token = tokenizer.mask_token
     if mask_token is None:
         raise ValueError("토크나이저에 [MASK] 토큰이 없습니다.")
 
-    # 제외할 토큰 아이디들
+    # 2) 제외할 토큰 ID (special token들은 샘플링 대상에서 제거)
     bad_ids = set()
     for tid in [
         tokenizer.pad_token_id,
@@ -482,15 +484,27 @@ def generate_peptides_with_mlm(
         if tid is not None:
             bad_ids.add(tid)
 
-    prompt = "[PEP] " + " ".join([mask_token] * peptide_len)
+    # 3) 타깃 서열을 아미노산 한 글자씩 공백으로 분리
+    #    예: "AFKLV" → "A F K L V"
+    target_seq = target_sequence.strip()
+    target_tokens = " ".join(list(target_seq))
+
+    # 4) 펩타이드 길이만큼 MASK 토큰을 뒤에 붙이기
+    #    최종 프롬프트:
+    #      "A F K L V [MASK] [MASK] ... [MASK]"
+    mask_tokens = " ".join([mask_token] * peptide_len)
+    prompt = f"{target_tokens} {mask_tokens}"
+
     input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(DEVICE)
 
     peptides = []
     seen = set()
 
+    allowed_aas = set("ACDEFGHIKLMNPQRSTVWY")
+
     with torch.no_grad():
         attempt = 0
-        # 최대 num_peptides 개까지만 생성
+        # 최대 num_peptides 개 생성 시도 (중복/비표준 아미노산 때문에 여유를 둠)
         while len(peptides) < num_peptides and attempt < num_peptides * 5:
             attempt += 1
             ids = input_ids.clone()
@@ -502,11 +516,18 @@ def generate_peptides_with_mlm(
                     logits = outputs.logits[0, pos] / temperature
                     probs = F.softmax(logits, dim=-1)
 
+                    # special token 확률 0으로
                     for bid in bad_ids:
                         probs[bid] = 0.0
 
-                    probs = probs / probs.sum()
+                    # 수치 오차 방지용 재정규화
+                    probs_sum = probs.sum()
+                    if probs_sum.item() == 0.0:
+                        # 전부 0이 되면 이 위치 샘플링은 포기하고 다음 시도로
+                        break
+                    probs = probs / probs_sum
 
+                    # top-k 필터링 후 샘플링
                     k = min(top_k, probs.size(0))
                     top_vals, top_idx = torch.topk(probs, k=k)
                     top_vals = top_vals / top_vals.sum()
@@ -516,17 +537,19 @@ def generate_peptides_with_mlm(
 
             # 마스크를 모두 채운 뒤에 한 번만 디코딩
             seq = tokenizer.decode(ids[0], skip_special_tokens=True).replace(" ", "")
+
+            # 프롬프트는 [타깃 서열 + 펩타이드] 구조이므로
+            # 마지막 peptide_len 글자를 펩타이드로 잘라서 사용
             pep = seq[-peptide_len:]
 
             if len(pep) != peptide_len:
                 continue
 
-            # 표준 20개 아미노산만 허용 (X, B, Z, U, O, J 등은 버리기)
-            allowed_aas = set("ACDEFGHIKLMNPQRSTVWY")
+            # 표준 20개 아미노산만 허용 (X, B, Z, U, O, J 등 제외)
             if any(a not in allowed_aas for a in pep):
-                # print(f"  [skip] 비표준 아미노산 포함 → {pep}")
                 continue
 
+            # 중복 제거
             if pep in seen:
                 continue
 
@@ -534,12 +557,11 @@ def generate_peptides_with_mlm(
             peptides.append(pep)
             print(f"  [{len(peptides)}/{num_peptides}] 생성 완료: {pep} (길이: {len(pep)})")
 
-
     print("\n--- 생성된 펩타이드 후보 목록 ---")
     for i, p in enumerate(peptides, 1):
         print(f"  - 후보 {i}: {p}")
     print("=" * 80)
-    print(f"✅ STEP 2: 총 {len(peptides)}개 펩타이드 후보 생성 완료")
+    print(f"STEP 2 완료: 총 {len(peptides)}개 펩타이드 후보 생성 (타깃 컨텍스트 사용)")
     print("=" * 80)
     return peptides
 
