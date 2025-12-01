@@ -37,6 +37,7 @@ from Bio.PDB import PDBParser
 
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
+from openpyxl import load_workbook
 import pandas as pd
 import numpy as np
 
@@ -60,8 +61,8 @@ TARGET_SEQUENCE = (
 )
 
 # 2) 생성할 펩타이드 설정
-NUM_PEPTIDES   = 100   # 생성할 펩타이드 후보 개수
-PEPTIDE_LENGTH = 18    # 각 펩타이드 길이 (아미노산 개수)
+NUM_PEPTIDES   = 10   # 생성할 펩타이드 후보 개수
+PEPTIDE_LENGTH = 10    # 각 펩타이드 길이 (아미노산 개수)
 
 # 3) ColabFold / 평가 단계 사용 여부
 RUN_COLABFOLD  = True   # ColabFold 구조 예측 실행 여부
@@ -183,6 +184,31 @@ def format_elapsed(start: datetime, end: datetime) -> str:
     return " ".join(parts)
 
 
+def format_seconds_hms(seconds: float) -> str:
+    """
+    초 단위 시간 값을 '00시간 00분 00초' 형식 문자열로 변환.
+    (1개 샘플당 평균 소요 시간 표시용)
+    """
+    if seconds < 0:
+        seconds = 0
+
+    total_seconds = int(round(seconds))
+
+    hours = total_seconds // 3600
+    total_seconds %= 3600
+    minutes = total_seconds // 60
+    secs = total_seconds % 60
+
+    parts = []
+    if hours > 0:
+        parts.append(f"{hours:02d}시간")
+    if hours > 0 or minutes > 0:
+        parts.append(f"{minutes:02d}분")
+    parts.append(f"{secs:02d}초")
+
+    return " ".join(parts)
+
+
 def print_step_timing(step_label: str, start: datetime, end: datetime):
     """각 스텝의 시작/종료/소요 시간을 출력 + 전역 리스트에 저장."""
     elapsed_str = format_elapsed(start, end)
@@ -248,26 +274,32 @@ def parse_prodigy_dg_from_stdout(stdout: str):
     if not stdout:
         return None
 
-    # 1) 가장 자주 나오는 패턴들 우선 시도
+    # 부호로 허용할 문자: ASCII -, +, 그리고 유니코드 마이너스(−, U+2212)
+    sign_pattern = r"[+\-−]?"
+
     patterns = [
-        r"Binding energy\s*[:=]\s*([\-+]?\d+(?:\.\d+)?)",   # Binding energy: -12.3
-        r"Predicted\s*Δ?G\s*[:=]\s*([\-+]?\d+(?:\.\d+)?)",  # Predicted ΔG: -10.5
-        r"\bΔG\s*[:=]\s*([\-+]?\d+(?:\.\d+)?)",             # ΔG: -9.87
+        rf"Binding energy\s*[:=]\s*({sign_pattern}\d+(?:\.\d+)?)",
+        rf"Predicted\s*Δ?G\s*[:=]\s*({sign_pattern}\d+(?:\.\d+)?)",
+        rf"\bΔG\s*[:=]\s*({sign_pattern}\d+(?:\.\d+)?)",
     ]
 
     for pat in patterns:
         m = re.search(pat, stdout, re.IGNORECASE)
         if m:
+            raw = m.group(1)
+            # 유니코드 마이너스(−)를 ASCII - 로 치환
+            raw = raw.replace("−", "-")
             try:
-                return float(m.group(1))
+                return float(raw)
             except ValueError:
                 pass
 
     # 2) 백업: stdout 전체에서 "소수점이 있는 첫 번째 실수"
-    m = re.search(r"([\-+]?\d+\.\d+)", stdout)
+    m = re.search(rf"({sign_pattern}\d+\.\d+)", stdout)
     if m:
+        raw = m.group(1).replace("−", "-")
         try:
-            return float(m.group(1))
+            return float(raw)
         except ValueError:
             return None
 
@@ -1509,6 +1541,20 @@ def run_prodigy_on_rank1(rank1_pdbs, out_dir: Path) -> pd.DataFrame:
     except Exception as e:
         print(f"[WARN] PRODIGY 요약 엑셀 저장 실패: {e}")
 
+    try:
+        wb = load_workbook(xlsx_path)
+        ws = wb.active  # prodigy_summary는 시트 하나뿐
+
+        # PRODDIGY_dG 컬럼이 3번째라는 가정 (complex, PRODIGY_status, PRODIGY_dG)
+        for cell in ws["C"]:
+            if isinstance(cell.value, (int, float)):
+                cell.number_format = "0.00"
+
+        wb.save(xlsx_path)
+    except Exception as e:
+        print(f"[WARN] PRODIGY 요약 엑셀 number_format 설정 실패: {e}")
+
+
     return df
 
 
@@ -2174,6 +2220,15 @@ def build_and_save_final_table(
     for idx, r in enumerate(rows, start=1):
         row_vals = [value_map[h](r, idx) for h in headers]
         ws.append(row_vals)
+    
+    # dG와 같은 실수 컬럼에 소수점 2자리 표시 형식 적용
+    for col_idx, header in enumerate(headers, start=1):
+        if "dG" in header:  # "PRODIGY_dG(kcal/mol)" 컬럼
+            col_letter = get_column_letter(col_idx)
+            for cell in ws[col_letter]:
+                if isinstance(cell.value, (int, float)):
+                    cell.number_format = "0.00"  # 항상 소수점 둘째 자리까지
+
 
     # ─────────────────────────────────────────────
     # 두 번째 시트: setting
@@ -2182,14 +2237,17 @@ def build_and_save_final_table(
 
     ws_setting.append(["항목", "값"])
 
+    target_seq_str = TARGET_SEQUENCE.strip()
     target_len = len(TARGET_SEQUENCE.strip())
 
+    ws_setting.append(["TARGET_SEQUENCE", target_seq_str])
     ws_setting.append(["TARGET_SEQUENCE_length", target_len])
     ws_setting.append(["PEPTIDE_LENGTH", PEPTIDE_LENGTH])
     ws_setting.append(["NUM_PEPTIDES", NUM_PEPTIDES])
     ws_setting.append(["PepMLM_temperature", PEPMLM_TEMPERATURE])
     ws_setting.append(["PepMLM_top_k", PEPMLM_TOP_K])
 
+    # 코드 실행 시작/종료/총 소요시간
     if start_time is not None:
         ws_setting.append(
             ["code_start_time", start_time.strftime("%Y.%m.%d %H:%M:%S")]
@@ -2205,6 +2263,20 @@ def build_and_save_final_table(
                 format_elapsed(start_time, end_time),
             ]
         )
+
+        # 후보군(샘플) 1개당 평균 소요 시간 (시간/분/초 + 초 표시)
+        n_samples = len(peptides) if peptides is not None else 0
+        if n_samples > 0:
+            total_seconds = (end_time - start_time).total_seconds()
+            per_sample_sec = total_seconds / n_samples
+            per_sample_hms = format_seconds_hms(per_sample_sec)
+
+            ws_setting.append(
+                [
+                    "code_elapsed_per_sample",
+                    f"{per_sample_hms} (≈ {per_sample_sec:.2f}초/샘플)",
+                ]
+            )
 
     # 빈 줄 하나
     ws_setting.append([])
@@ -2225,6 +2297,13 @@ def build_and_save_final_table(
     # 열 너비 자동조절 (랭킹 시트 + setting 시트 둘 다)
     autofit_worksheet_columns(ws)
     autofit_worksheet_columns(ws_setting)
+
+    # '값' 열은 너무 넓어지지 않도록 고정 너비(예: 20)로 설정
+    for cell in ws_setting[1]:  # 첫 번째 행 헤더에서 '값'이 있는 열 찾기
+        if cell.value == "값":
+            col_letter = get_column_letter(cell.column)
+            ws_setting.column_dimensions[col_letter].width = 20
+            break
 
     out_xlsx = results_dir / f"final_peptide_rank_{timestamp()}.xlsx"
     wb.save(out_xlsx)
