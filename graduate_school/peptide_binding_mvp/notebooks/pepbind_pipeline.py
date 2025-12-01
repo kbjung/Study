@@ -62,7 +62,7 @@ TARGET_SEQUENCE = (
 
 # 2) 생성할 펩타이드 설정
 NUM_PEPTIDES   = 10   # 생성할 펩타이드 후보 개수
-PEPTIDE_LENGTH = 4    # 각 펩타이드 길이 (아미노산 개수)
+PEPTIDE_LENGTH = 10    # 각 펩타이드 길이 (아미노산 개수)
 
 # 3) ColabFold / 평가 단계 사용 여부
 RUN_COLABFOLD  = True   # ColabFold 구조 예측 실행 여부
@@ -459,6 +459,20 @@ def autofit_worksheet_columns(ws):
         # 여유 공간 조금 더해서 설정 (2~3 정도 여유)
         if max_length > 0:
             ws.column_dimensions[col_letter].width = max_length + 2
+
+
+def autofit_header_only(ws):
+    """
+    첫 번째 행(헤더) 텍스트 길이만 기준으로 열 너비를 맞추는 함수.
+    데이터 내용 길이는 무시하고, 컬럼명만 기준으로 폭을 잡고 싶을 때 사용.
+    """
+    header_row = next(ws.iter_rows(min_row=1, max_row=1))
+    for cell in header_row:
+        if cell.value is None:
+            continue
+        col_letter = get_column_letter(cell.column)
+        header_len = len(str(cell.value))
+        ws.column_dimensions[col_letter].width = header_len + 2
 
 
 # =====================================================================
@@ -2310,8 +2324,10 @@ def build_and_save_final_table(
                 ]
             )
 
-    # 열 너비 자동조절 (랭킹 시트 + setting 시트 둘 다)
-    autofit_worksheet_columns(ws)
+    # pepbind_ranking 시트: 컬럼명(헤더) 길이만 기준으로 열 너비 설정
+    autofit_header_only(ws)
+
+    # setting 시트: 전체 내용 기준 자동 맞춤
     autofit_worksheet_columns(ws_setting)
 
     # '값' 열은 너무 넓어지지 않도록 고정 너비(예: 20)로 설정
