@@ -62,7 +62,7 @@ TARGET_SEQUENCE = (
 
 # 2) 생성할 펩타이드 설정
 NUM_PEPTIDES   = 10   # 생성할 펩타이드 후보 개수
-PEPTIDE_LENGTH = 10    # 각 펩타이드 길이 (아미노산 개수)
+PEPTIDE_LENGTH = 4    # 각 펩타이드 길이 (아미노산 개수)
 
 # 3) ColabFold / 평가 단계 사용 여부
 RUN_COLABFOLD  = True   # ColabFold 구조 예측 실행 여부
@@ -264,44 +264,60 @@ def init_workspace():
 def parse_prodigy_dg_from_stdout(stdout: str):
     """
     PRODIGY stdout에서 ΔG(또는 binding energy)를 추출하는 헬퍼 함수.
-    형식 예시:
-      Binding energy: -12.3 kcal/mol
-      Predicted ΔG: -10.5 kcal/mol
 
-    여러 줄 중 첫 번째 매칭값만 사용.
-    실패하면 None 리턴.
+    우선순위:
+      1) 'Predicted binding affinity (kcal.mol-1): -6.4' 같은 라인
+      2) 'Binding energy: -12.3 kcal/mol'
+      3) 'Predicted ΔG: -10.5 kcal/mol'
+      4) 'ΔG: -10.5'
+      5) 백업: 전체 텍스트에서 [-50, 0] 범위의 실수 중 가장 음수(가장 작은 값)
     """
     if not stdout:
         return None
 
     # 부호로 허용할 문자: ASCII -, +, 그리고 유니코드 마이너스(−, U+2212)
     sign_pattern = r"[+\-−]?"
+    # 지수 표현도 포함 (예: 2.2e-05)
+    float_pattern = rf"{sign_pattern}\d+(?:\.\d+)?(?:[eE][+\-−]?\d+)?"
 
     patterns = [
-        rf"Binding energy\s*[:=]\s*({sign_pattern}\d+(?:\.\d+)?)",
-        rf"Predicted\s*Δ?G\s*[:=]\s*({sign_pattern}\d+(?:\.\d+)?)",
-        rf"\bΔG\s*[:=]\s*({sign_pattern}\d+(?:\.\d+)?)",
+        # 예: [++] Predicted binding affinity (kcal.mol-1):     -6.4
+        rf"Predicted\s*binding\s+affinity.*?:\s*({float_pattern})",
+        # 예: Binding energy: -12.3 kcal/mol
+        rf"Binding energy\s*[:=]\s*({float_pattern})",
+        # 예: Predicted ΔG: -10.5
+        rf"Predicted\s*Δ?G\s*[:=]\s*({float_pattern})",
+        # 예: ΔG: -10.5
+        rf"\bΔG\s*[:=]\s*({float_pattern})",
     ]
 
+    # 1차: 위에서 정의한 의미 있는 라인들에서 직접 추출
     for pat in patterns:
         m = re.search(pat, stdout, re.IGNORECASE)
         if m:
             raw = m.group(1)
-            # 유니코드 마이너스(−)를 ASCII - 로 치환
-            raw = raw.replace("−", "-")
+            raw = raw.replace("−", "-")  # 유니코드 마이너스를 ASCII '-'로
             try:
                 return float(raw)
             except ValueError:
                 pass
 
-    # 2) 백업: stdout 전체에서 "소수점이 있는 첫 번째 실수"
-    m = re.search(rf"({sign_pattern}\d+\.\d+)", stdout)
-    if m:
-        raw = m.group(1).replace("−", "-")
+    # 2차 백업: 전체 텍스트에서 실수들을 모아서 [-50, 0] 범위 중 가장 음수 값을 선택
+    candidates = []
+    for m in re.finditer(float_pattern, stdout):
+        raw = m.group(0).replace("−", "-")
         try:
-            return float(raw)
+            val = float(raw)
         except ValueError:
-            return None
+            continue
+
+        # PRODIGY ΔG로서 말이 되는 범위만 후보로 사용
+        if -50.0 <= val <= 0.0:
+            candidates.append(val)
+
+    if candidates:
+        # 가장 음수(가장 작은 값)를 ΔG로 사용
+        return min(candidates)
 
     return None
 
