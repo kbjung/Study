@@ -62,7 +62,7 @@ TARGET_SEQUENCE = (
 
 # 2) 생성할 펩타이드 설정
 NUM_PEPTIDES   = 10   # 생성할 펩타이드 후보 개수
-PEPTIDE_LENGTH = 10    # 각 펩타이드 길이 (아미노산 개수)
+PEPTIDE_LENGTH = 18    # 각 펩타이드 길이 (아미노산 개수)
 
 # 3) ColabFold / 평가 단계 사용 여부
 RUN_COLABFOLD  = True   # ColabFold 구조 예측 실행 여부
@@ -461,18 +461,30 @@ def autofit_worksheet_columns(ws):
             ws.column_dimensions[col_letter].width = max_length + 2
 
 
-def autofit_header_only(ws):
+def autofit_header_only(ws, padding: int = 1, max_width: int = 18):
     """
-    첫 번째 행(헤더) 텍스트 길이만 기준으로 열 너비를 맞추는 함수.
-    데이터 내용 길이는 무시하고, 컬럼명만 기준으로 폭을 잡고 싶을 때 사용.
+    첫 번째 행(헤더) 텍스트 길이만 기준으로 열 너비를 맞추되,
+    너무 긴 컬럼명은 max_width를 넘지 않도록 제한.
+
+    - padding: 헤더 길이에 더해줄 여유 공간 (기본 1)
+    - max_width: 열 너비 상한 (기본 18)
     """
     header_row = next(ws.iter_rows(min_row=1, max_row=1))
     for cell in header_row:
         if cell.value is None:
             continue
+
         col_letter = get_column_letter(cell.column)
         header_len = len(str(cell.value))
-        ws.column_dimensions[col_letter].width = header_len + 2
+
+        # 기본: 헤더 길이 + padding
+        width = header_len + padding
+
+        # 너무 긴 헤더는 상한으로 잘라서 좁게 유지
+        if width > max_width:
+            width = max_width
+
+        ws.column_dimensions[col_letter].width = width
 
 
 # =====================================================================
