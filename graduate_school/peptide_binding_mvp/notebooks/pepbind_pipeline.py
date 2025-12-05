@@ -83,7 +83,7 @@ OBABEL_CMD = shutil.which("obabel") or "obabel"
 
 # ColabFold 자원/안전 관련 설정
 # 기본값은 32:128, 메모리 많이 부족하면 환경변수나 여기 값을 "16:64"로 줄여도 됨
-COLABFOLD_MAX_MSA = os.environ.get("COLABFOLD_MAX_MSA", "16:64")
+COLABFOLD_MAX_MSA = os.environ.get("COLABFOLD_MAX_MSA", "32:128")
 
 # 진행률이 일정 시간 이상 변화 없으면 강제 종료 (메모리 부족/프리징 방지용)
 COLABFOLD_MAX_IDLE_MIN = int(os.environ.get("COLABFOLD_MAX_IDLE_MIN", "30"))   # 예: 30분
