@@ -83,6 +83,7 @@ OBABEL_CMD = shutil.which("obabel") or "obabel"
 
 # ColabFold 자원/안전 관련 설정
 # 기본값은 32:128, 메모리 많이 부족하면 환경변수나 여기 값을 "16:64"로 줄여도 됨
+# 최대 몇 개의 시퀀스를 사용할지 제한하는 옵션
 COLABFOLD_MAX_MSA = os.environ.get("COLABFOLD_MAX_MSA", "32:128")
 
 # 진행률이 일정 시간 이상 변화 없으면 강제 종료 (메모리 부족/프리징 방지용)
@@ -702,11 +703,17 @@ def run_colabfold_batch_with_progress(
 
     cmd = [
         COLABFOLD_CMD,
-        "--num-recycle", "3",                         # 기본 1회
+        # AlphaFold가 출력 구조를 몇 번 재귀적으로 개선할지(Refinement) 설정. 
+        # 내부에서 반복적으로 개선하는 반복 횟수
+        # 기본 1회. 
+        "--num-recycle", "3",          
         "--model-type", "alphafold2_multimer_v3",
         "--rank", "ptm",
-        "--max-msa", max_msa,
-        "--num-models", "3",                          # 기본 1회
+        "--max-msa", max_msa, # 최대 몇 개의 시퀀스를 사용할지 제한하는 옵션
+        # AlphaFold가 model_1, model_2, model_3 등 서로 다른 파라미터 세트를 가진 모델을 몇 개 사용할지 결정하는 옵션. 
+        # 미묘하게 다른 가중치를 가진 여러 모델들이 존재
+        # 기본 1회
+        "--num-models", "3", 
         "--stop-at-score", "0.5",
         str(csv_path),
         str(out_dir),
