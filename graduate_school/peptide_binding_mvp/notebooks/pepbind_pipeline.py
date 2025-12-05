@@ -702,11 +702,11 @@ def run_colabfold_batch_with_progress(
 
     cmd = [
         COLABFOLD_CMD,
-        "--num-recycle", "1",
+        "--num-recycle", "3",                         # 기본 1회
         "--model-type", "alphafold2_multimer_v3",
         "--rank", "ptm",
         "--max-msa", max_msa,
-        "--num-models", "1",
+        "--num-models", "3",                          # 기본 1회
         "--stop-at-score", "0.5",
         str(csv_path),
         str(out_dir),
