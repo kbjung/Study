@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """
 pepbind_pipeline.py - WSL/오프라인 환경용 통합 파이프라인 (정리 버전)
 
