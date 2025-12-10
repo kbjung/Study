@@ -1,0 +1,23 @@
+name: pepbind
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11.14
+  - vina=1.2.6
+  - openbabel=3.1.1
+  - openjdk[version='>=17']
+  - rdkit
+  - scipy[version='>=1.10']
+  - lxml
+  - freesasa
+  - pdbfixer
+  - pdb2pqr
+  - openmm
+  - pip
+  - scikit-learn
+  - matplotlib
+  - pytorch-cuda=12.4
+  - pytorch
+prefix: /home/aisys/miniconda3/envs/pepbind
