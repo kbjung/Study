@@ -232,6 +232,7 @@ def print_step_timing(step_label: str, start: datetime, end: datetime):
 
 
 def init_workspace():
+    # PDP(Peptide Discovery Pipeline)
     """PDP_YYYYMMDD_HHMMSS 형태 워크스페이스 및 하위 폴더 생성."""
     ws_name = f"PDP_{timestamp()}"
     ws_root = BASE_DIR / ws_name
