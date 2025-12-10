@@ -85,7 +85,7 @@ OBABEL_CMD = shutil.which("obabel") or "obabel"
 COLABFOLD_MAX_MSA = os.environ.get("COLABFOLD_MAX_MSA", "32:128")
 
 # 진행률이 일정 시간 이상 변화 없으면 강제 종료 (메모리 부족/프리징 방지용)
-COLABFOLD_MAX_IDLE_MIN = int(os.environ.get("COLABFOLD_MAX_IDLE_MIN", "30"))   # 예: 30분
+COLABFOLD_MAX_IDLE_MIN = int(os.environ.get("COLABFOLD_MAX_IDLE_MIN", "10"))   # 예: 30분
 
 # 전체 ColabFold 실행 시간 상한 (분)
 COLABFOLD_MAX_TOTAL_MIN = int(os.environ.get("COLABFOLD_MAX_TOTAL_MIN", "1440"))  # 예: 360(6시간)
