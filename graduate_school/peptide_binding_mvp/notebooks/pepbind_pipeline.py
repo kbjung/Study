@@ -692,27 +692,33 @@ def run_colabfold_batch_with_progress(
     colabfold_batch 실행 + 진행 상황 출력:
     - 기본은 GPU로 시도
     - GPU에서 RESOURCE_EXHAUSTED / Out of memory 발생 시,
-      한 번에 한해 CPU(JAX_PLATFORM_NAME=cpu, CUDA_VISIBLE_DEVICES='')로 재시도
+      한 번에 한해 CPU(JAX_PLATFORMS=cpu, CUDA_VISIBLE_DEVICES='')로 재시도
 
     진행 상황:
     - rank_001*.pdb 개수를 주기적으로 세어
       "완료된 구조 개수 / 전체 복합체 개수" 형태로 출력
     """
+
+    # 공용 MSA 서버 에러 패턴 (log.txt / colabfold_batch.log 둘 다에서 사용할 것)
+    msa_keywords = (
+        "Timeout while submitting to MSA server",
+        "Error while submitting to MSA server",
+        "Error while fetching result from MSA server",
+        "HTTPSConnectionPool",
+        "Failed to establish a new connection",
+        "api.colabfold.com",
+        "timed out",
+    )
+
     out_dir.mkdir(parents=True, exist_ok=True)
 
     cmd = [
         COLABFOLD_CMD,
-        # AlphaFold가 출력 구조를 몇 번 재귀적으로 개선할지(Refinement) 설정. 
-        # 내부에서 반복적으로 개선하는 반복 횟수
-        # 기본 1회. 
-        "--num-recycle", "3",          
+        "--num-recycle", "3",
         "--model-type", "alphafold2_multimer_v3",
         "--rank", "ptm",
-        "--max-msa", max_msa, # 최대 몇 개의 시퀀스를 사용할지 제한하는 옵션
-        # AlphaFold가 model_1, model_2, model_3 등 서로 다른 파라미터 세트를 가진 모델을 몇 개 사용할지 결정하는 옵션. 
-        # 미묘하게 다른 가중치를 가진 여러 모델들이 존재
-        # 기본 1회
-        "--num-models", "3", 
+        "--max-msa", max_msa,
+        "--num-models", "3",
         "--stop-at-score", "0.5",
         str(csv_path),
         str(out_dir),
@@ -760,6 +766,7 @@ def run_colabfold_batch_with_progress(
         while True:
             ret = proc.poll()
 
+            # 현재까지 생성된 rank_001 구조 개수 확인
             rank1_files = list(out_dir.glob("*rank_001*.*pdb"))
             done = len(rank1_files)
             if done != last_done:
@@ -773,6 +780,43 @@ def run_colabfold_batch_with_progress(
 
             now = time.time()
 
+            # ───────────────────────────────────────────────
+            # 0) MSA 서버 타임아웃 로그가 찍혔는지 즉시 확인
+            #    - log.txt 가 있으면 우선 사용
+            #    - 없으면 colabfold_batch*.log 사용
+            #    - 패턴이 보이면 idle timeout을 기다리지 않고 즉시 종료
+            # ───────────────────────────────────────────────
+            log_txt_path = out_dir / "log.txt"
+            log_to_check = log_txt_path if log_txt_path.exists() else log_file
+            is_msa_error = False
+
+            try:
+                if log_to_check.exists():
+                    with open(log_to_check) as f:
+                        lines = f.readlines()
+                    tail_text = "".join(lines[-80:])
+                    is_msa_error = any(k in tail_text for k in msa_keywords)
+            except Exception:
+                # 로그를 아직 못 읽어도 그냥 넘어가고 다음 루프에서 다시 시도
+                is_msa_error = False
+
+            if is_msa_error:
+                print("\n[ERROR] ColabFold 로그에서 MSA 서버(api.colabfold.com) 타임아웃 패턴이 감지되었습니다.")
+                print("       - MSA 서버 장애 또는 과부하, 네트워크 문제 가능성이 큽니다.")
+                print("       - 잠시 후 다시 시도하거나, --msa-mode single_sequence 옵션을 사용해보세요.")
+                print(f"       - 로그 파일: {log_to_check}")
+
+                proc.terminate()
+                try:
+                    proc.wait(timeout=60)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+
+                raise RuntimeError(
+                    f"ColabFold({device_label}) 실행 중 MSA 서버(api.colabfold.com) 응답 없음/오류 감지. "
+                    f"로그: {log_to_check}"
+                )
+
             # 1) idle timeout: 진행률이 너무 오래 안 변하면 강제 종료
             if (now - last_progress_time) > max_idle_min * 60:
                 print(
@@ -784,6 +828,8 @@ def run_colabfold_batch_with_progress(
                     proc.wait(timeout=60)
                 except subprocess.TimeoutExpired:
                     proc.kill()
+
+                # idle timeout 시에도 참고용으로 로그 위치를 찍어준다.
                 print(f"[INFO] 강제 종료 후 ColabFold 로그를 확인하세요: {log_file}")
                 raise RuntimeError(
                     f"ColabFold({device_label}) 강제 종료 (idle timeout {max_idle_min}분 초과). "
@@ -838,13 +884,15 @@ def run_colabfold_batch_with_progress(
     # 1차 시도: GPU 모드
     try:
         rank1_files = _run_on_device("GPU", extra_env=None, log_name="colabfold_batch.log")
-    except RuntimeError:
-        gpu_log_file = out_dir / "colabfold_batch.log"
+    except RuntimeError as e:
+        # log.txt 가 있으면 그걸 우선 사용, 없으면 colabfold_batch.log
+        log_txt_path = out_dir / "log.txt"
+        gpu_log_file = log_txt_path if log_txt_path.exists() else (out_dir / "colabfold_batch.log")
+
         tail_text = ""
         try:
             with open(gpu_log_file) as f:
                 lines = f.readlines()
-            # 로그의 뒤쪽 일부만 사용 (너가 쓰던 80줄 그대로 유지)
             tail_text = "".join(lines[-80:])
         except Exception:
             pass
@@ -858,27 +906,12 @@ def run_colabfold_batch_with_progress(
         )
         is_oom = any(k in tail_text for k in oom_keywords)
 
-        # 2) MSA 서버 관련 키워드 확인 (새로 추가되는 부분)
-        msa_keywords = (
-            "Timeout while submitting to MSA server",
-            "Error while submitting to MSA server",
-            "Error while fetching result from MSA server",
-            "HTTPSConnectionPool",
-            "Failed to establish a new connection",
-            "api.colabfold.com",
-            "timed out",
-        )
+        # 2) MSA 서버 관련 키워드 확인
         is_msa_error = any(k in tail_text for k in msa_keywords)
 
-        # 3) MSA 서버 에러라면 명확한 메시지 출력 후 에러 전파
+        # 3) 이미 _run_on_device 안에서 MSA 에러로 처리한 경우라면, 여기서는 그대로 재전파
         if is_msa_error:
-            print("\n[ERROR] ColabFold MSA 서버(api.colabfold.com) 응답 문제가 감지되었습니다.")
-            print("       - MSA 서버 장애 또는 과부하, 네트워크 문제 가능성이 큽니다.")
-            print("       - 잠시 후 다시 시도하거나, --msa-mode single_sequence 옵션을 사용해보세요.")
-            print(f"       - ColabFold 로그 파일: {gpu_log_file}")
-            raise RuntimeError(
-                f"MSA 서버(api.colabfold.com) 응답 없음/오류로 ColabFold 실행 실패. 로그: {gpu_log_file}"
-            )
+            raise
 
         # 4) CPU fallback을 안 쓰거나, OOM이 아니라면 → 그대로 에러 전파
         if (not COLABFOLD_CPU_FALLBACK) or (not is_oom):
@@ -888,11 +921,8 @@ def run_colabfold_batch_with_progress(
         print("\n[WARN] GPU 메모리 부족(OOM)으로 ColabFold 실행 실패를 감지했습니다.")
         print("       CPU 모드(JAX_PLATFORMS=cpu, CUDA_VISIBLE_DEVICES='')로 한 번 더 재시도합니다.")
         cpu_env = {
-            # GPU 완전 비활성화
             "CUDA_VISIBLE_DEVICES": "",
-            # 새 JAX 버전용
             "JAX_PLATFORMS": "cpu",
-            # 구버전 JAX 호환용
             "JAX_PLATFORM_NAME": "cpu",
         }
         rank1_files = _run_on_device(
