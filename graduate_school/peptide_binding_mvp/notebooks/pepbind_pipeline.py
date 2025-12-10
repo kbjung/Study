@@ -839,20 +839,17 @@ def run_colabfold_batch_with_progress(
     try:
         rank1_files = _run_on_device("GPU", extra_env=None, log_name="colabfold_batch.log")
     except RuntimeError:
-        # GPU 모드에서 실패했을 때만 CPU fallback 고려
-        if not COLABFOLD_CPU_FALLBACK:
-            raise
-
         gpu_log_file = out_dir / "colabfold_batch.log"
         tail_text = ""
         try:
             with open(gpu_log_file) as f:
                 lines = f.readlines()
+            # 로그의 뒤쪽 일부만 사용 (너가 쓰던 80줄 그대로 유지)
             tail_text = "".join(lines[-80:])
         except Exception:
             pass
 
-        # OOM 관련 키워드가 로그에 있는지 확인
+        # 1) OOM 관련 키워드 확인
         oom_keywords = (
             "RESOURCE_EXHAUSTED",
             "Out of memory",
@@ -861,27 +858,48 @@ def run_colabfold_batch_with_progress(
         )
         is_oom = any(k in tail_text for k in oom_keywords)
 
-        if is_oom:
-            print("\n[WARN] GPU 메모리 부족(OOM)으로 ColabFold 실행 실패를 감지했습니다.")
-            print("       CPU 모드(JAX_PLATFORMS=cpu, CUDA_VISIBLE_DEVICES='')로 한 번 더 재시도합니다.")
-            cpu_env = {
-                # GPU 완전 비활성화
-                "CUDA_VISIBLE_DEVICES": "",
-                # 새 JAX 버전용 (로그에서 직접 요구하던 설정)
-                "JAX_PLATFORMS": "cpu",
-                # 구버전 JAX 호환용 (혹시라도 쓰고 있을 수도 있어서 같이 넣어줌)
-                "JAX_PLATFORM_NAME": "cpu",
-            }
-            # CPU 모드는 별도 로그 파일 이름 사용
-            rank1_files = _run_on_device(
-                "CPU",
-                extra_env=cpu_env,
-                log_name="colabfold_batch_cpu.log",
+        # 2) MSA 서버 관련 키워드 확인 (새로 추가되는 부분)
+        msa_keywords = (
+            "Timeout while submitting to MSA server",
+            "Error while submitting to MSA server",
+            "Error while fetching result from MSA server",
+            "HTTPSConnectionPool",
+            "Failed to establish a new connection",
+            "api.colabfold.com",
+            "timed out",
+        )
+        is_msa_error = any(k in tail_text for k in msa_keywords)
+
+        # 3) MSA 서버 에러라면 명확한 메시지 출력 후 에러 전파
+        if is_msa_error:
+            print("\n[ERROR] ColabFold MSA 서버(api.colabfold.com) 응답 문제가 감지되었습니다.")
+            print("       - MSA 서버 장애 또는 과부하, 네트워크 문제 가능성이 큽니다.")
+            print("       - 잠시 후 다시 시도하거나, --msa-mode single_sequence 옵션을 사용해보세요.")
+            print(f"       - ColabFold 로그 파일: {gpu_log_file}")
+            raise RuntimeError(
+                f"MSA 서버(api.colabfold.com) 응답 없음/오류로 ColabFold 실행 실패. 로그: {gpu_log_file}"
             )
-        else:
-            # OOM이 아닌 다른 이유라면 그대로 에러 전파
+
+        # 4) CPU fallback을 안 쓰거나, OOM이 아니라면 → 그대로 에러 전파
+        if (not COLABFOLD_CPU_FALLBACK) or (not is_oom):
             raise
 
+        # 5) 여기까지 왔다는 건: GPU OOM + CPU fallback 허용
+        print("\n[WARN] GPU 메모리 부족(OOM)으로 ColabFold 실행 실패를 감지했습니다.")
+        print("       CPU 모드(JAX_PLATFORMS=cpu, CUDA_VISIBLE_DEVICES='')로 한 번 더 재시도합니다.")
+        cpu_env = {
+            # GPU 완전 비활성화
+            "CUDA_VISIBLE_DEVICES": "",
+            # 새 JAX 버전용
+            "JAX_PLATFORMS": "cpu",
+            # 구버전 JAX 호환용
+            "JAX_PLATFORM_NAME": "cpu",
+        }
+        rank1_files = _run_on_device(
+            "CPU",
+            extra_env=cpu_env,
+            log_name="colabfold_batch_cpu.log",
+        )
 
     # ColabFold 실행 후에도 혹시 남아 있을 수 있는 캐시 한 번 더 정리
     clear_gpu_memory()
