@@ -964,18 +964,43 @@ def run_colabfold_batch_with_progress(
 # === STEP 3b: ColabFold 출력 구조 후처리 (OpenMM minimization / MD / Rosetta Relax)
 # =====================================================================
 
-def _get_openmm_platform():
+def _get_openmm_platform(prefer_gpu: bool = True):
     """
-    사용 가능한 OpenMM platform을 CUDA → OpenCL → CPU 순서로 선택.
+    OpenMM Platform 선택.
+
+    - prefer_gpu=True  : CUDA → OpenCL → HIP → Metal → CPU → Reference 순으로 시도
+    - prefer_gpu=False : CPU → Reference → CUDA → OpenCL → HIP → Metal 순으로 시도
+
+    반환: Platform 객체 또는 None
     """
     if not _OPENMM_AVAILABLE:
         return None
-    for name in ("CUDA", "OpenCL", "CPU"):
+
+    # OpenMM 8+: openmm.Platform, legacy: simtk.openmm.Platform
+    try:
+        from openmm import Platform
+    except Exception:
         try:
-            return openmm.Platform.getPlatformByName(name)
+            from simtk.openmm import Platform  # type: ignore
         except Exception:
-            continue
+            return None
+
+    gpu = ["CUDA", "OpenCL", "HIP", "Metal"]
+    cpu = ["CPU", "Reference"]
+    order = (gpu + cpu) if prefer_gpu else (cpu + gpu)
+
+    last_err = None
+    for name in order:
+        try:
+            plat = Platform.getPlatformByName(name)
+            return plat
+        except Exception as e:
+            last_err = e
+
+    if last_err is not None:
+        print(f"[OpenMM] platform 선택 실패: {last_err}")
     return None
+
 
 
 def _ensure_oxt_for_all_segment_cterms(modeller: app.Modeller) -> int:
