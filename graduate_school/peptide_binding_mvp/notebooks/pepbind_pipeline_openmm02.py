@@ -1087,6 +1087,29 @@ def _ensure_cterm_oxt(in_pdb: Path, out_pdb: Path) -> Path:
     return out_pdb
 
 
+def _openmm_data_dir() -> Path:
+    # openmm.app 패키지의 data 디렉토리
+    return Path(app.__file__).resolve().parent / "data"
+
+def _pick_implicit_solvent_xml() -> str | None:
+    data_dir = _openmm_data_dir()
+
+    # OpenMM 설치/버전에 따라 파일명이 조금씩 달라서 후보를 여러 개 둠
+    candidates = [
+        "amber14/implicit/obc2.xml",
+        "amber14/implicit/obc1.xml",
+        "implicit/obc2.xml",
+        "implicit/obc1.xml",
+        "amber14-obc.xml",
+        "amber14_gbsa.xml",
+    ]
+
+    for rel in candidates:
+        if (data_dir / rel).exists():
+            return rel
+    return None
+
+
 def openmm_minimize_and_md(
     in_pdb: Path,
     out_pdb: Path,
@@ -1117,7 +1140,20 @@ def openmm_minimize_and_md(
     pdb = app.PDBFile(str(use_pdb_path))
 
     # ForceField
-    ff = app.ForceField("amber14-all.xml")
+    implicit_xml = _pick_implicit_solvent_xml()
+    if implicit_xml is None:
+        # 여기서 조용히 vacuum으로 진행하면 결과 품질이 애매해져서,
+        # 나는 명확히 에러로 끊는 걸 추천함.
+        data_dir = _openmm_data_dir()
+        raise RuntimeError(
+            "OpenMM implicit solvent XML을 찾지 못했습니다.\n"
+            f"- OpenMM data dir: {data_dir}\n"
+            "- data 폴더 내 implicit/ 또는 amber14/implicit/ 아래 xml 존재 여부 확인 필요\n"
+            "- (대안) explicit solvent로 돌리거나, implicitSolvent 인자를 제거해야 합니다."
+        )
+
+    print(f"[OpenMM] ForceField: amber14-all.xml + {implicit_xml}")
+    ff = app.ForceField("amber14-all.xml", implicit_xml)
 
     modeller = app.Modeller(pdb.topology, pdb.positions)
     # 수소 자동 추가
@@ -1127,7 +1163,7 @@ def openmm_minimize_and_md(
         modeller.topology,
         nonbondedMethod=app.NoCutoff,
         constraints=app.HBonds,
-        implicitSolvent=app.OBC2,
+        implicitSolvent=app.OBC2, # 이제 이 인자를 실제로 소비하는 generator가 존재
     )
 
     # Backbone(Cα, N, C)에 positional restraint 추가
@@ -2191,6 +2227,13 @@ def load_prodigy_scores(prodigy_dir: Path):
     return scores, statuses
 
 
+def _strip_refine_suffix(stem: str) -> str:
+    for suf in ("_openmm_refined", "_relax"):
+        if stem.endswith(suf):
+            stem = stem[:-len(suf)]
+    return stem
+
+
 def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs):
     """
     ColabFold 출력 폴더에서 ipTM 값을 최대한 유연하게 찾는다.
@@ -2206,7 +2249,8 @@ def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs):
         return iptms
 
     for pdb in rank1_pdbs:
-        base = pdb.stem
+        # base = pdb.stem
+        base = _strip_refine_suffix(pdb.stem)
         prefix = base.split("_unrelaxed")[0]
 
         found_val = None
