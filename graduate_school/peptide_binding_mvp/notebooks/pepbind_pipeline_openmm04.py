@@ -2209,24 +2209,43 @@ def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs):
     """
     ColabFold 출력 폴더에서 ipTM 값을 최대한 유연하게 찾는다.
 
-    - 각 rank_001 PDB의 stem(base)를 기준으로
-      1) base*scores*.json
-      2) base_prefix*scores*.json  (base에서 '_unrelaxed' 앞부분)
-      3) base*_ranking_debug.json, base_prefix*_ranking_debug.json, ranking_debug.json
-    에서 'iptm' 또는 'iptm+ptm' 키를 찾아본다.
+    - 일반 rank_001 PDB의 stem(base)을 기준으로:
+        1) base*scores*.json
+        2) base_prefix*scores*.json  (base에서 '_unrelaxed' 앞부분)
+        3) base*_ranking_debug.json, base_prefix*_ranking_debug.json, ranking_debug.json
+      에서 'iptm' 또는 'iptm+ptm' 키를 찾아본다.
+
+    - OpenMM/Rosetta 후처리로 파일명이 변한 경우도 지원:
+        예) ..._openmm_refined.pdb, ..._relax.pdb, ..._openmm_refined_relax.pdb
+      → 원본 stem을 추정(orig_stem)해서 json을 찾고,
+        iptms[orig_stem] 과 iptms[base] 둘 다에 같은 값을 기록한다.
     """
     iptms = {}
     if not colabfold_out_dir.exists():
         return iptms
 
+    refine_suffixes = ("_relax", "_openmm_refined", "_openmm", "_refined")
+
     for pdb in rank1_pdbs:
-        base = pdb.stem
-        prefix = base.split("_unrelaxed")[0]
+        base = pdb.stem  # 현재 사용 PDB stem (후처리 suffix 포함 가능)
+
+        # 0) 원본 stem 추정: 뒤에 붙은 suffix를 반복 제거
+        orig_stem = base
+        changed = True
+        while changed:
+            changed = False
+            for suf in refine_suffixes:
+                if orig_stem.endswith(suf):
+                    orig_stem = orig_stem[: -len(suf)]
+                    changed = True
+
+        # ColabFold id prefix는 보통 '_unrelaxed' 이전까지
+        prefix = orig_stem.split("_unrelaxed")[0]
 
         found_val = None
 
-        # 1) scores*.json 후보들
-        candidates = list(colabfold_out_dir.glob(f"{base}*scores*.json"))
+        # 1) scores*.json 후보들 (원본 stem 기준)
+        candidates = list(colabfold_out_dir.glob(f"{orig_stem}*scores*.json"))
         if not candidates:
             candidates = list(colabfold_out_dir.glob(f"{prefix}*scores*.json"))
 
@@ -2250,7 +2269,7 @@ def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs):
         # 2) ranking_debug 후보들
         if found_val is None:
             rd_candidates = [
-                colabfold_out_dir / f"{base}_ranking_debug.json",
+                colabfold_out_dir / f"{orig_stem}_ranking_debug.json",
                 colabfold_out_dir / f"{prefix}_ranking_debug.json",
                 colabfold_out_dir / "ranking_debug.json",
             ]
@@ -2270,6 +2289,7 @@ def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs):
                         break
 
         if found_val is not None:
+            # 원본/후처리 stem 둘 다 키로 저장
             iptms[orig_stem] = found_val
             iptms[base] = found_val
 
