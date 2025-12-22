@@ -4,6 +4,7 @@ pepbind_pipeline.py - WSL/오프라인 환경용 통합 파이프라인 (정리 
 구성:
 - STEP 2: PepMLM(ESM-2)로 펩타이드 후보 생성 (GPU 사용)
 - STEP 3: ColabFold 멀티머로 타깃-펩타이드 복합체 구조 예측 (진행 상황 표시)
+- STEP 3b: OpenMM으로 복합체 구조 튜닝
 - STEP 4: AutoDock Vina 도킹 (CPU, stdout 파싱)
 - STEP 5: PLIP 상호작용 분석
 - STEP 6: PRODIGY 결합 자유에너지 평가
@@ -978,6 +979,114 @@ def _get_openmm_platform():
     return None
 
 
+def _ensure_cterm_oxt(in_pdb: Path, out_pdb: Path) -> Path:
+    """
+    OpenMM Amber forcefield가 C-terminus 템플릿을 적용할 때 OXT가 필요해서
+    ColabFold/AF PDB에 OXT가 없으면 template mismatch가 발생할 수 있음.
+    → 각 체인 마지막 residue에 OXT가 없으면, 기존 O 원자를 복제해서 OXT를 추가한다.
+    (좌표는 O와 동일하게 복제: 템플릿 매칭 목적의 최소 패치)
+    """
+    lines = Path(in_pdb).read_text().splitlines()
+
+    # ATOM/HETATM 라인만 대상으로 체인별 마지막 residue를 찾는다
+    atom_idxs = []
+    max_serial = 0
+
+    def _is_atom_line(line: str) -> bool:
+        rec = line[0:6].strip()
+        return rec in ("ATOM", "HETATM")
+
+    def _parse_serial(line: str) -> int:
+        try:
+            return int(line[6:11])
+        except Exception:
+            return 0
+
+    def _atom_name(line: str) -> str:
+        return line[12:16].strip()
+
+    def _res_key(line: str):
+        # (chainID, resSeq, iCode, resName)
+        chain = line[21].strip() if len(line) > 21 else ""
+        resseq = line[22:26].strip()
+        icode = line[26].strip() if len(line) > 26 else ""
+        resname = line[17:20].strip()
+        return (chain, resseq, icode, resname)
+
+    # chain별 마지막 residue key 저장
+    last_res_by_chain = {}
+    # residue별 atom name set 저장
+    atoms_in_res = {}
+
+    for i, line in enumerate(lines):
+        if not _is_atom_line(line):
+            continue
+        atom_idxs.append(i)
+        max_serial = max(max_serial, _parse_serial(line))
+
+        rk = _res_key(line)
+        chain = rk[0]
+        last_res_by_chain[chain] = rk
+        atoms_in_res.setdefault(rk, set()).add(_atom_name(line))
+
+    if not last_res_by_chain:
+        # 원자 라인이 없으면 그대로 복사
+        Path(out_pdb).write_text("\n".join(lines) + "\n")
+        return out_pdb
+
+    # 삽입할 OXT 라인들: (삽입 index, 라인 문자열)
+    inserts = []
+
+    for chain, rk in last_res_by_chain.items():
+        # 이미 OXT가 있으면 스킵
+        if "OXT" in atoms_in_res.get(rk, set()):
+            continue
+
+        # 해당 residue의 마지막 ATOM 라인을 찾아서 그 뒤에 OXT 삽입
+        # 가능하면 'O' 라인을 복제해서 atom name만 OXT로 바꿈
+        idxs = [i for i in atom_idxs if _res_key(lines[i]) == rk]
+        if not idxs:
+            continue
+
+        # 우선 O 원자 라인 찾기
+        o_line_idx = None
+        for i in idxs:
+            if _atom_name(lines[i]) == "O":
+                o_line_idx = i
+                break
+        base_idx = o_line_idx if o_line_idx is not None else idxs[-1]
+        base_line = lines[base_idx]
+
+        max_serial += 1
+        # PDB fixed-width 유지하면서 atom name만 OXT로 변경
+        # serial(6:11), atom name(12:16), element(76:78) 보강
+        new_line = list(base_line)
+        # serial
+        serial_str = f"{max_serial:5d}"
+        new_line[6:11] = list(serial_str)
+        # atom name field: 4 chars, right/left 정렬 이슈를 피하려면 " OXT" 권장
+        new_line[12:16] = list(f"{'OXT':>4}")
+        # element
+        if len(new_line) < 78:
+            new_line += [" "] * (78 - len(new_line))
+        new_line[76:78] = list(" O")  # element O
+        new_line = "".join(new_line)
+
+        inserts.append((base_idx + 1, new_line))
+
+    if not inserts:
+        Path(out_pdb).write_text("\n".join(lines) + "\n")
+        return out_pdb
+
+    # 여러 삽입이 있을 수 있으니 index 큰 것부터 삽입
+    inserts.sort(key=lambda x: x[0], reverse=True)
+    for insert_at, new_line in inserts:
+        lines.insert(insert_at, new_line)
+
+    Path(out_pdb).write_text("\n".join(lines) + "\n")
+    return out_pdb
+
+
 def openmm_minimize_and_md(
     in_pdb: Path,
     out_pdb: Path,
@@ -996,8 +1105,18 @@ def openmm_minimize_and_md(
 
     print(f"[OpenMM] 입력 구조: {in_pdb.name}")
 
-    pdb = app.PDBFile(str(in_pdb))
-    # 필요에 따라 amber99sb.xml 등으로 변경 가능
+    # OpenMM 템플릿 매칭 실패 방지용: C-terminus OXT 보강
+    patched_in = in_pdb.parent / f"{in_pdb.stem}__oxt.pdb"
+    try:
+        _ensure_cterm_oxt(in_pdb, patched_in)
+        use_pdb_path = patched_in
+    except Exception as e:
+        print(f"[WARN] OXT 보강 실패(원본 사용): {e}")
+        use_pdb_path = in_pdb
+
+    pdb = app.PDBFile(str(use_pdb_path))
+
+    # ForceField
     ff = app.ForceField("amber14-all.xml")
 
     modeller = app.Modeller(pdb.topology, pdb.positions)
