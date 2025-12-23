@@ -4,6 +4,7 @@ pepbind_pipeline.py - WSL/오프라인 환경용 통합 파이프라인 (정리 
 구성:
 - STEP 2: PepMLM(ESM-2)로 펩타이드 후보 생성 (GPU 사용)
 - STEP 3: ColabFold 멀티머로 타깃-펩타이드 복합체 구조 예측 (진행 상황 표시)
+- STEP 3b: OpenMM으로 복합체 구조 튜닝
 - STEP 4: AutoDock Vina 도킹 (CPU, stdout 파싱)
 - STEP 5: PLIP 상호작용 분석
 - STEP 6: PRODIGY 결합 자유에너지 평가
@@ -44,16 +45,15 @@ from collections import defaultdict
 import math
 import sys
 
-
-START_TIME = datetime.now()
-END_TIME = None          # 전체 종료시간 저장용
-STEP_TIMINGS = []        # 각 스텝별 시작/종료/소요시간 기록용
-
 # 필수: OpenMM (minimization + short MD용)
 import openmm
 import openmm.app as app
 from openmm import unit
 _OPENMM_AVAILABLE = True
+
+START_TIME = datetime.now()
+END_TIME = None          # 전체 종료시간 저장용
+STEP_TIMINGS = []        # 각 스텝별 시작/종료/소요시간 기록용
 
 # =====================================================================
 # === 사용자 설정 영역: 여기만 수정해서 사용 ==========================
@@ -65,7 +65,7 @@ TARGET_SEQUENCE = (
 )
 
 # 2) 생성할 펩타이드 설정
-NUM_PEPTIDES   = 20   # 생성할 펩타이드 후보 개수
+NUM_PEPTIDES   = 10   # 생성할 펩타이드 후보 개수
 PEPTIDE_LENGTH = 4    # 각 펩타이드 길이 (아미노산 개수)
 
 # 3) ColabFold / 평가 단계 사용 여부
@@ -85,45 +85,13 @@ PRODIGY_SCRIPT  = os.environ.get("PRODIGY_SCRIPT", "prodigy").strip()
 
 OBABEL_CMD = shutil.which("obabel") or "obabel"
 
-# 명령어 존재 여부 확인 및 경로 찾기
-def find_command(cmd_name: str, env_var: str = None) -> str:
-    """명령어를 찾고, 없으면 에러 메시지와 함께 예외 발생"""
-    # 환경변수가 설정되어 있으면 우선 사용
-    if env_var and os.environ.get(env_var):
-        cmd = os.environ.get(env_var).strip()
-        # 절대 경로이거나 실행 가능한 경우
-        if os.path.exists(cmd) or (os.path.isabs(cmd) and os.path.isfile(cmd)):
-            return cmd
-        # PATH에서 찾기
-        cmd_path = shutil.which(cmd)
-        if cmd_path:
-            return cmd_path
-        raise FileNotFoundError(
-            f"환경변수 {env_var}에 지정된 명령어를 찾을 수 없습니다: {cmd}\n"
-            f"경로를 확인하거나 PATH에 추가해주세요."
-        )
-    
-    # PATH에서 명령어 찾기
-    cmd_path = shutil.which(cmd_name)
-    if cmd_path:
-        return cmd_path
-    
-    raise FileNotFoundError(
-        f"명령어 '{cmd_name}'를 찾을 수 없습니다.\n"
-        f"설치되어 있는지 확인하고, PATH에 추가되었는지 확인해주세요.\n"
-        f"또는 환경변수로 경로를 지정해주세요 (예: export COLABFOLD_CMD='/path/to/colabfold_batch')"
-    )
-
-# 명령어 검증 (실제 사용 시점에 검증하도록 변경)
-# 여기서는 경로만 저장하고, 실제 사용 시 검증
-
 # ColabFold 자원/안전 관련 설정
 # 기본값은 32:128, 메모리 많이 부족하면 환경변수나 여기 값을 "16:64"로 줄여도 됨
 # 최대 몇 개의 시퀀스를 사용할지 제한하는 옵션
 COLABFOLD_MAX_MSA = os.environ.get("COLABFOLD_MAX_MSA", "32:128")
 
 # 진행률이 일정 시간 이상 변화 없으면 강제 종료 (메모리 부족/프리징 방지용)
-COLABFOLD_MAX_IDLE_MIN = int(os.environ.get("COLABFOLD_MAX_IDLE_MIN", "30"))   # 예: 30분
+COLABFOLD_MAX_IDLE_MIN = int(os.environ.get("COLABFOLD_MAX_IDLE_MIN", "10"))   # 예: 30분
 
 # 전체 ColabFold 실행 시간 상한 (분)
 COLABFOLD_MAX_TOTAL_MIN = int(os.environ.get("COLABFOLD_MAX_TOTAL_MIN", "1440"))  # 예: 360(6시간)
@@ -146,6 +114,8 @@ REFINE_RESTRAINT_K  = float(os.environ.get("REFINE_RESTRAINT_K", "1.0"))   # Cα
 # Rosetta Relax 바이너리 (예: "relax.linuxgccrelease" 또는 "relax.linuxgccrelease -relax:fast")
 RELAX_CMD = os.environ.get("RELAX_CMD", "").strip()
 
+
+
 # =====================================================================
 # === 공통 설정 / 유틸 =================================================
 # =====================================================================
@@ -153,7 +123,7 @@ RELAX_CMD = os.environ.get("RELAX_CMD", "").strip()
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"[INFO] PyTorch device: {DEVICE}", flush=True)
+print(f"[INFO] PyTorch device: {DEVICE}")
 
 # JAX / ColabFold 메모리 설정 (모든 자식 프로세스에 적용)
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -279,6 +249,7 @@ def print_step_timing(step_label: str, start: datetime, end: datetime):
 
 
 def init_workspace():
+    # PDP(Peptide Discovery Pipeline)
     """PDP_YYYYMMDD_HHMMSS 형태 워크스페이스 및 하위 폴더 생성."""
     ws_name = f"PDP_{timestamp()}"
     ws_root = BASE_DIR / ws_name
@@ -475,17 +446,17 @@ def print_run_config():
     print(f"PLIP_CMD              : {PLIP_CMD}")
     print(f"PRODIGY_SCRIPT        : {PRODIGY_SCRIPT}")
     print(f"OBABEL_CMD            : {OBABEL_CMD}")
-    print(f"RUN_REFINEMENT        : {RUN_REFINEMENT}")
-    print(f"REFINE_MD_TIME_PS     : {REFINE_MD_TIME_PS}")
-    print(f"REFINE_TIMESTEP_FS    : {REFINE_TIMESTEP_FS}")
-    print(f"REFINE_RESTRAINT_K    : {REFINE_RESTRAINT_K}")
-    print(f"RELAX_CMD             : {RELAX_CMD}")
-    print(f"OpenMM available      : {_OPENMM_AVAILABLE}")
     print(f"COLABFOLD_MAX_MSA     : {COLABFOLD_MAX_MSA}")
     print(f"COLABFOLD_MAX_IDLE_MIN: {COLABFOLD_MAX_IDLE_MIN}")
     print(f"COLABFOLD_MAX_TOTAL_MIN: {COLABFOLD_MAX_TOTAL_MIN}")
     print(f"COLABFOLD_CPU_FALLBACK: {COLABFOLD_CPU_FALLBACK}")
     print(f"PyTorch DEVICE        : {DEVICE}")
+    print(f"RUN_REFINEMENT = {RUN_REFINEMENT}")
+    print(f"_OPENMM_AVAILABLE = {_OPENMM_AVAILABLE}")
+    print(f"REFINE_MD_TIME_PS = {REFINE_MD_TIME_PS}")
+    print(f"REFINE_TIMESTEP_FS = {REFINE_TIMESTEP_FS}")
+    print(f"REFINE_RESTRAINT_K = {REFINE_RESTRAINT_K}")
+    print(f"RELAX_CMD = {RELAX_CMD}")
     print("=" * 80 + "\n")
 
 
@@ -744,30 +715,33 @@ def run_colabfold_batch_with_progress(
     colabfold_batch 실행 + 진행 상황 출력:
     - 기본은 GPU로 시도
     - GPU에서 RESOURCE_EXHAUSTED / Out of memory 발생 시,
-      한 번에 한해 CPU(JAX_PLATFORM_NAME=cpu, CUDA_VISIBLE_DEVICES='')로 재시도
+      한 번에 한해 CPU(JAX_PLATFORMS=cpu, CUDA_VISIBLE_DEVICES='')로 재시도
 
     진행 상황:
     - rank_001*.pdb 개수를 주기적으로 세어
       "완료된 구조 개수 / 전체 복합체 개수" 형태로 출력
     """
+
+    # 공용 MSA 서버 에러 패턴 (log.txt / colabfold_batch.log 둘 다에서 사용할 것)
+    msa_keywords = (
+        "Timeout while submitting to MSA server",
+        "Error while submitting to MSA server",
+        "Error while fetching result from MSA server",
+        "HTTPSConnectionPool",
+        "Failed to establish a new connection",
+        "api.colabfold.com",
+        "timed out",
+    )
+
     out_dir.mkdir(parents=True, exist_ok=True)
-    
-    # ColabFold 명령어 확인 및 검증
-    colabfold_cmd = find_command("colabfold_batch", "COLABFOLD_CMD")
 
     cmd = [
-        colabfold_cmd,
-        # AlphaFold가 출력 구조를 몇 번 재귀적으로 개선할지(Refinement) 설정. 
-        # 내부에서 반복적으로 개선하는 반복 횟수
-        # 기본 1회. 
-        "--num-recycle", "3",          
+        COLABFOLD_CMD,
+        "--num-recycle", "3",
         "--model-type", "alphafold2_multimer_v3",
         "--rank", "ptm",
-        "--max-msa", max_msa, # 최대 몇 개의 시퀀스를 사용할지 제한하는 옵션
-        # AlphaFold가 model_1, model_2, model_3 등 서로 다른 파라미터 세트를 가진 모델을 몇 개 사용할지 결정하는 옵션. 
-        # 미묘하게 다른 가중치를 가진 여러 모델들이 존재
-        # 기본 1회
-        "--num-models", "3", 
+        "--max-msa", max_msa,
+        "--num-models", "3",
         "--stop-at-score", "0.5",
         str(csv_path),
         str(out_dir),
@@ -815,6 +789,7 @@ def run_colabfold_batch_with_progress(
         while True:
             ret = proc.poll()
 
+            # 현재까지 생성된 rank_001 구조 개수 확인
             rank1_files = list(out_dir.glob("*rank_001*.*pdb"))
             done = len(rank1_files)
             if done != last_done:
@@ -828,6 +803,43 @@ def run_colabfold_batch_with_progress(
 
             now = time.time()
 
+            # ───────────────────────────────────────────────
+            # 0) MSA 서버 타임아웃 로그가 찍혔는지 즉시 확인
+            #    - log.txt 가 있으면 우선 사용
+            #    - 없으면 colabfold_batch*.log 사용
+            #    - 패턴이 보이면 idle timeout을 기다리지 않고 즉시 종료
+            # ───────────────────────────────────────────────
+            log_txt_path = out_dir / "log.txt"
+            log_to_check = log_txt_path if log_txt_path.exists() else log_file
+            is_msa_error = False
+
+            try:
+                if log_to_check.exists():
+                    with open(log_to_check) as f:
+                        lines = f.readlines()
+                    tail_text = "".join(lines[-80:])
+                    is_msa_error = any(k in tail_text for k in msa_keywords)
+            except Exception:
+                # 로그를 아직 못 읽어도 그냥 넘어가고 다음 루프에서 다시 시도
+                is_msa_error = False
+
+            if is_msa_error:
+                print("\n[ERROR] ColabFold 로그에서 MSA 서버(api.colabfold.com) 타임아웃 패턴이 감지되었습니다.")
+                print("       - MSA 서버 장애 또는 과부하, 네트워크 문제 가능성이 큽니다.")
+                print("       - 잠시 후 다시 시도하거나, --msa-mode single_sequence 옵션을 사용해보세요.")
+                print(f"       - 로그 파일: {log_to_check}")
+
+                proc.terminate()
+                try:
+                    proc.wait(timeout=60)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+
+                raise RuntimeError(
+                    f"ColabFold({device_label}) 실행 중 MSA 서버(api.colabfold.com) 응답 없음/오류 감지. "
+                    f"로그: {log_to_check}"
+                )
+
             # 1) idle timeout: 진행률이 너무 오래 안 변하면 강제 종료
             if (now - last_progress_time) > max_idle_min * 60:
                 print(
@@ -839,6 +851,8 @@ def run_colabfold_batch_with_progress(
                     proc.wait(timeout=60)
                 except subprocess.TimeoutExpired:
                     proc.kill()
+
+                # idle timeout 시에도 참고용으로 로그 위치를 찍어준다.
                 print(f"[INFO] 강제 종료 후 ColabFold 로그를 확인하세요: {log_file}")
                 raise RuntimeError(
                     f"ColabFold({device_label}) 강제 종료 (idle timeout {max_idle_min}분 초과). "
@@ -893,12 +907,11 @@ def run_colabfold_batch_with_progress(
     # 1차 시도: GPU 모드
     try:
         rank1_files = _run_on_device("GPU", extra_env=None, log_name="colabfold_batch.log")
-    except RuntimeError:
-        # GPU 모드에서 실패했을 때만 CPU fallback 고려
-        if not COLABFOLD_CPU_FALLBACK:
-            raise
+    except RuntimeError as e:
+        # log.txt 가 있으면 그걸 우선 사용, 없으면 colabfold_batch.log
+        log_txt_path = out_dir / "log.txt"
+        gpu_log_file = log_txt_path if log_txt_path.exists() else (out_dir / "colabfold_batch.log")
 
-        gpu_log_file = out_dir / "colabfold_batch.log"
         tail_text = ""
         try:
             with open(gpu_log_file) as f:
@@ -907,7 +920,7 @@ def run_colabfold_batch_with_progress(
         except Exception:
             pass
 
-        # OOM 관련 키워드가 로그에 있는지 확인
+        # 1) OOM 관련 키워드 확인
         oom_keywords = (
             "RESOURCE_EXHAUSTED",
             "Out of memory",
@@ -916,32 +929,37 @@ def run_colabfold_batch_with_progress(
         )
         is_oom = any(k in tail_text for k in oom_keywords)
 
-        if is_oom:
-            print("\n[WARN] GPU 메모리 부족(OOM)으로 ColabFold 실행 실패를 감지했습니다.")
-            print("       CPU 모드(JAX_PLATFORMS=cpu, CUDA_VISIBLE_DEVICES='')로 한 번 더 재시도합니다.")
-            cpu_env = {
-                # GPU 완전 비활성화
-                "CUDA_VISIBLE_DEVICES": "",
-                # 새 JAX 버전용 (로그에서 직접 요구하던 설정)
-                "JAX_PLATFORMS": "cpu",
-                # 구버전 JAX 호환용 (혹시라도 쓰고 있을 수도 있어서 같이 넣어줌)
-                "JAX_PLATFORM_NAME": "cpu",
-            }
-            # CPU 모드는 별도 로그 파일 이름 사용
-            rank1_files = _run_on_device(
-                "CPU",
-                extra_env=cpu_env,
-                log_name="colabfold_batch_cpu.log",
-            )
-        else:
-            # OOM이 아닌 다른 이유라면 그대로 에러 전파
+        # 2) MSA 서버 관련 키워드 확인
+        is_msa_error = any(k in tail_text for k in msa_keywords)
+
+        # 3) 이미 _run_on_device 안에서 MSA 에러로 처리한 경우라면, 여기서는 그대로 재전파
+        if is_msa_error:
             raise
 
+        # 4) CPU fallback을 안 쓰거나, OOM이 아니라면 → 그대로 에러 전파
+        if (not COLABFOLD_CPU_FALLBACK) or (not is_oom):
+            raise
+
+        # 5) 여기까지 왔다는 건: GPU OOM + CPU fallback 허용
+        print("\n[WARN] GPU 메모리 부족(OOM)으로 ColabFold 실행 실패를 감지했습니다.")
+        print("       CPU 모드(JAX_PLATFORMS=cpu, CUDA_VISIBLE_DEVICES='')로 한 번 더 재시도합니다.")
+        cpu_env = {
+            "CUDA_VISIBLE_DEVICES": "",
+            "JAX_PLATFORMS": "cpu",
+            "JAX_PLATFORM_NAME": "cpu",
+        }
+        rank1_files = _run_on_device(
+            "CPU",
+            extra_env=cpu_env,
+            log_name="colabfold_batch_cpu.log",
+        )
 
     # ColabFold 실행 후에도 혹시 남아 있을 수 있는 캐시 한 번 더 정리
     clear_gpu_memory()
 
     return rank1_files
+
+
 
 # =====================================================================
 # === STEP 3b: ColabFold 출력 구조 후처리 (OpenMM minimization / MD / Rosetta Relax)
@@ -958,6 +976,137 @@ def _get_openmm_platform():
             return openmm.Platform.getPlatformByName(name)
         except Exception:
             continue
+    return None
+
+
+def _ensure_cterm_oxt(in_pdb: Path, out_pdb: Path) -> Path:
+    """
+    OpenMM Amber forcefield가 C-terminus 템플릿을 적용할 때 OXT가 필요해서
+    ColabFold/AF PDB에 OXT가 없으면 template mismatch가 발생할 수 있음.
+    → 각 체인 마지막 residue에 OXT가 없으면, 기존 O 원자를 복제해서 OXT를 추가한다.
+    (좌표는 O와 동일하게 복제: 템플릿 매칭 목적의 최소 패치)
+    """
+    lines = Path(in_pdb).read_text().splitlines()
+
+    # ATOM/HETATM 라인만 대상으로 체인별 마지막 residue를 찾는다
+    atom_idxs = []
+    max_serial = 0
+
+    def _is_atom_line(line: str) -> bool:
+        rec = line[0:6].strip()
+        return rec in ("ATOM", "HETATM")
+
+    def _parse_serial(line: str) -> int:
+        try:
+            return int(line[6:11])
+        except Exception:
+            return 0
+
+    def _atom_name(line: str) -> str:
+        return line[12:16].strip()
+
+    def _res_key(line: str):
+        # (chainID, resSeq, iCode, resName)
+        chain = line[21].strip() if len(line) > 21 else ""
+        resseq = line[22:26].strip()
+        icode = line[26].strip() if len(line) > 26 else ""
+        resname = line[17:20].strip()
+        return (chain, resseq, icode, resname)
+
+    # chain별 마지막 residue key 저장
+    last_res_by_chain = {}
+    # residue별 atom name set 저장
+    atoms_in_res = {}
+
+    for i, line in enumerate(lines):
+        if not _is_atom_line(line):
+            continue
+        atom_idxs.append(i)
+        max_serial = max(max_serial, _parse_serial(line))
+
+        rk = _res_key(line)
+        chain = rk[0]
+        last_res_by_chain[chain] = rk
+        atoms_in_res.setdefault(rk, set()).add(_atom_name(line))
+
+    if not last_res_by_chain:
+        # 원자 라인이 없으면 그대로 복사
+        Path(out_pdb).write_text("\n".join(lines) + "\n")
+        return out_pdb
+
+    # 삽입할 OXT 라인들: (삽입 index, 라인 문자열)
+    inserts = []
+
+    for chain, rk in last_res_by_chain.items():
+        # 이미 OXT가 있으면 스킵
+        if "OXT" in atoms_in_res.get(rk, set()):
+            continue
+
+        # 해당 residue의 마지막 ATOM 라인을 찾아서 그 뒤에 OXT 삽입
+        # 가능하면 'O' 라인을 복제해서 atom name만 OXT로 바꿈
+        idxs = [i for i in atom_idxs if _res_key(lines[i]) == rk]
+        if not idxs:
+            continue
+
+        # 우선 O 원자 라인 찾기
+        o_line_idx = None
+        for i in idxs:
+            if _atom_name(lines[i]) == "O":
+                o_line_idx = i
+                break
+        base_idx = o_line_idx if o_line_idx is not None else idxs[-1]
+        base_line = lines[base_idx]
+
+        max_serial += 1
+        # PDB fixed-width 유지하면서 atom name만 OXT로 변경
+        # serial(6:11), atom name(12:16), element(76:78) 보강
+        new_line = list(base_line)
+        # serial
+        serial_str = f"{max_serial:5d}"
+        new_line[6:11] = list(serial_str)
+        # atom name field: 4 chars, right/left 정렬 이슈를 피하려면 " OXT" 권장
+        new_line[12:16] = list(f"{'OXT':>4}")
+        # element
+        if len(new_line) < 78:
+            new_line += [" "] * (78 - len(new_line))
+        new_line[76:78] = list(" O")  # element O
+        new_line = "".join(new_line)
+
+        inserts.append((base_idx + 1, new_line))
+
+    if not inserts:
+        Path(out_pdb).write_text("\n".join(lines) + "\n")
+        return out_pdb
+
+    # 여러 삽입이 있을 수 있으니 index 큰 것부터 삽입
+    inserts.sort(key=lambda x: x[0], reverse=True)
+    for insert_at, new_line in inserts:
+        lines.insert(insert_at, new_line)
+
+    Path(out_pdb).write_text("\n".join(lines) + "\n")
+    return out_pdb
+
+
+def _openmm_data_dir() -> Path:
+    # openmm.app 패키지의 data 디렉토리
+    return Path(app.__file__).resolve().parent / "data"
+
+def _pick_implicit_solvent_xml() -> str | None:
+    data_dir = _openmm_data_dir()
+
+    # OpenMM 설치/버전에 따라 파일명이 조금씩 달라서 후보를 여러 개 둠
+    candidates = [
+        "amber14/implicit/obc2.xml",
+        "amber14/implicit/obc1.xml",
+        "implicit/obc2.xml",
+        "implicit/obc1.xml",
+        "amber14-obc.xml",
+        "amber14_gbsa.xml",
+    ]
+
+    for rel in candidates:
+        if (data_dir / rel).exists():
+            return rel
     return None
 
 
@@ -979,9 +1128,32 @@ def openmm_minimize_and_md(
 
     print(f"[OpenMM] 입력 구조: {in_pdb.name}")
 
-    pdb = app.PDBFile(str(in_pdb))
-    # 필요에 따라 amber99sb.xml 등으로 변경 가능
-    ff = app.ForceField("amber14-all.xml")
+    # OpenMM 템플릿 매칭 실패 방지용: C-terminus OXT 보강
+    patched_in = in_pdb.parent / f"{in_pdb.stem}__oxt.pdb"
+    try:
+        _ensure_cterm_oxt(in_pdb, patched_in)
+        use_pdb_path = patched_in
+    except Exception as e:
+        print(f"[WARN] OXT 보강 실패(원본 사용): {e}")
+        use_pdb_path = in_pdb
+
+    pdb = app.PDBFile(str(use_pdb_path))
+
+    # ForceField
+    implicit_xml = _pick_implicit_solvent_xml()
+    if implicit_xml is None:
+        # 여기서 조용히 vacuum으로 진행하면 결과 품질이 애매해져서,
+        # 나는 명확히 에러로 끊는 걸 추천함.
+        data_dir = _openmm_data_dir()
+        raise RuntimeError(
+            "OpenMM implicit solvent XML을 찾지 못했습니다.\n"
+            f"- OpenMM data dir: {data_dir}\n"
+            "- data 폴더 내 implicit/ 또는 amber14/implicit/ 아래 xml 존재 여부 확인 필요\n"
+            "- (대안) explicit solvent로 돌리거나, implicitSolvent 인자를 제거해야 합니다."
+        )
+
+    print(f"[OpenMM] ForceField: amber14-all.xml + {implicit_xml}")
+    ff = app.ForceField("amber14-all.xml", implicit_xml)
 
     modeller = app.Modeller(pdb.topology, pdb.positions)
     # 수소 자동 추가
@@ -991,7 +1163,7 @@ def openmm_minimize_and_md(
         modeller.topology,
         nonbondedMethod=app.NoCutoff,
         constraints=app.HBonds,
-        implicitSolvent=app.OBC2,
+        implicitSolvent=app.OBC2, # 이제 이 인자를 실제로 소비하는 generator가 존재
     )
 
     # Backbone(Cα, N, C)에 positional restraint 추가
@@ -1162,6 +1334,8 @@ def refine_structures_with_openmm_and_relax(
     print(f"\n[INFO] 구조 후처리 완료. 총 {len(refined_pdbs)}개 구조 반환.")
     print("=" * 80)
     return refined_pdbs
+
+
 
 # =====================================================================
 # === STEP 4: AutoDock Vina 도킹 =====================================
@@ -2053,6 +2227,13 @@ def load_prodigy_scores(prodigy_dir: Path):
     return scores, statuses
 
 
+def _strip_refine_suffix(stem: str) -> str:
+    for suf in ("_openmm_refined", "_relax"):
+        if stem.endswith(suf):
+            stem = stem[:-len(suf)]
+    return stem
+
+
 def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs):
     """
     ColabFold 출력 폴더에서 ipTM 값을 최대한 유연하게 찾는다.
@@ -2068,7 +2249,8 @@ def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs):
         return iptms
 
     for pdb in rank1_pdbs:
-        base = pdb.stem
+        # base = pdb.stem
+        base = _strip_refine_suffix(pdb.stem)
         prefix = base.split("_unrelaxed")[0]
 
         found_val = None
@@ -2643,12 +2825,6 @@ def main():
     # 전체 파이프라인 시작 시간
     global START_TIME
     START_TIME = datetime.now()
-    
-    # 초기 출력 (로그 설정 전)
-    print("=" * 80, flush=True)
-    print("PEPBIND 파이프라인 시작", flush=True)
-    print(f"시작 시간: {START_TIME.strftime('%Y.%m.%d %H:%M:%S')}", flush=True)
-    print("=" * 80, flush=True)
 
     # STEP 1: 워크스페이스/폴더 구조 생성
     step1_start = datetime.now()
@@ -2722,7 +2898,7 @@ def main():
         now = datetime.now()
         print("\n[INFO] RUN_COLABFOLD=False 또는 펩타이드 없음 → ColabFold 단계 스킵")
         print_step_timing("STEP 3: ColabFold 구조 예측 (스킵)", now, now)
-    
+
     # STEP 3b: ColabFold 출력 구조 후처리 (OpenMM / Rosetta Relax)
     if RUN_REFINEMENT and rank1_pdbs:
         step3b_start = datetime.now()
@@ -2739,6 +2915,7 @@ def main():
         now = datetime.now()
         print("\n[INFO] RUN_REFINEMENT=False 또는 rank_001 PDB 없음 → 구조 후처리 단계 스킵")
         print_step_timing("STEP 3b: 구조 후처리 (스킵)", now, now)
+
     # STEP 4: Vina
     if RUN_VINA:
         step4_start = datetime.now()
@@ -2799,8 +2976,6 @@ def main():
             end_time=END_TIME,
             step_timings=STEP_TIMINGS,
         )
-    else:
-        final_xlsx = None
 
     print("\n" + "=" * 80)
     print("🎉 파이프라인 실행 종료")
@@ -2814,24 +2989,7 @@ def main():
     print(f"[INFO] 종료 시간: {END_TIME.strftime('%Y.%m.%d %H:%M:%S')}")
     print(f"[INFO] 총 소요 시간: {format_elapsed(START_TIME, END_TIME)}")
     print("=" * 80)
-    
-    # 출력 버퍼 플러시
-    import sys
-    sys.stdout.flush()
-    sys.stderr.flush()
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n[INFO] 사용자에 의해 중단되었습니다.")
-        import sys
-        sys.exit(1)
-    except Exception as e:
-        print(f"\n[ERROR] 예상치 못한 오류 발생: {e}")
-        import traceback
-        traceback.print_exc()
-        import sys
-        sys.exit(1)
-
+    main()
