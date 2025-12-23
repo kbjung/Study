@@ -978,6 +978,65 @@ def _get_openmm_platform():
     return None
 
 
+def _ensure_oxt_for_all_segment_cterms(modeller: app.Modeller) -> int:
+    """
+    ColabFold/AlphaFold PDB에서 chain break(결측 잔기)로 인해
+    'C-terminus인데 OXT가 없는' 잔기가 생기면 OpenMM ForceField 템플릿 매칭이 실패한다.
+
+    이 함수는 각 residue의 C 원자가 다른 residue의 N과 외부결합(peptide bond)을 갖지 않는 경우
+    해당 residue를 segment C-terminus로 간주하고, OXT 원자를 추가한다.
+    (이미 OXT가 있으면 스킵)
+    """
+    top = modeller.topology
+    pos = list(modeller.positions)
+
+    # adjacency (atom -> bonded atoms)
+    adj = {}
+    for a1, a2 in top.bonds():
+        adj.setdefault(a1, []).append(a2)
+        adj.setdefault(a2, []).append(a1)
+
+    added = 0
+    for chain in top.chains():
+        for res in chain.residues():
+            atoms = list(res.atoms())
+            if any(a.name == "OXT" for a in atoms):
+                continue
+
+            atomC = next((a for a in atoms if a.name == "C"), None)
+            atomO = next((a for a in atoms if a.name == "O"), None)
+            if atomC is None or atomO is None:
+                continue
+
+            # C가 다른 residue의 N과 결합이 없으면: segment C-terminus (chain end 또는 chain break)
+            bonded = adj.get(atomC, [])
+            has_external_N = any((nb.name == "N") and (nb.residue is not res) for nb in bonded)
+            if has_external_N:
+                continue
+
+            # OXT 좌표 추정: C->O 방향의 반대쪽에 C-O 길이(약 1.23 Å)만큼 배치
+            c_nm = pos[atomC.index].value_in_unit(unit.nanometer)
+            o_nm = pos[atomO.index].value_in_unit(unit.nanometer)
+            vx, vy, vz = (c_nm[0] - o_nm[0], c_nm[1] - o_nm[1], c_nm[2] - o_nm[2])
+            norm = (vx * vx + vy * vy + vz * vz) ** 0.5
+            if norm < 1e-8:
+                # 극단적 케이스: 임의 방향
+                vx, vy, vz = (1.0, 0.0, 0.0)
+                norm = 1.0
+            vx, vy, vz = (vx / norm, vy / norm, vz / norm)
+
+            bond_len_nm = 0.123  # 1.23 Å
+            new_nm = (c_nm[0] + bond_len_nm * vx, c_nm[1] + bond_len_nm * vy, c_nm[2] + bond_len_nm * vz)
+
+            new_atom = top.addAtom("OXT", app.element.oxygen, res)
+            top.addBond(atomC, new_atom)
+            pos.append(openmm.Vec3(*new_nm) * unit.nanometer)
+            added += 1
+
+    if added:
+        modeller.positions = pos
+    return added
+
 def openmm_minimize_and_md(
     in_pdb: Path,
     out_pdb: Path,
@@ -988,8 +1047,9 @@ def openmm_minimize_and_md(
     """
     OpenMM을 이용해 단순한 에너지 minimization + 짧은 MD를 수행하는 함수.
 
-    - ForceField: amber14-all + implicit solvent(OBC2) (환경에 따라 조정 가능)
-    - Backbone(Cα, N, C)에 position restraint를 걸고 100 ps 정도 MD.
+    - ForceField: amber14-all + implicit/obc2 (가능하면 적용)
+    - Backbone(Cα, N, C)에 position restraint를 걸고 짧게 MD
+    - GPU(CUDA/OpenCL) 우선 시도 → 실패 시 CPU로 자동 폴백
     """
     if not _OPENMM_AVAILABLE:
         raise RuntimeError("OpenMM이 설치되어 있지 않아 refinement를 수행할 수 없습니다.")
@@ -997,18 +1057,70 @@ def openmm_minimize_and_md(
     print(f"[OpenMM] 입력 구조: {in_pdb.name}")
 
     pdb = app.PDBFile(str(in_pdb))
-    # 필요에 따라 amber99sb.xml 등으로 변경 가능
-    ff = app.ForceField("amber14-all.xml")
-
     modeller = app.Modeller(pdb.topology, pdb.positions)
-    # 수소 자동 추가
-    modeller.addHydrogens(ff)
 
-    system = ff.createSystem(
-        modeller.topology,
-        nonbondedMethod=app.NoCutoff,
-        constraints=app.HBonds,
-    )
+    # (선택) 물/이온 제거 (ColabFold 출력에는 보통 없지만 안전장치)
+    try:
+        modeller.deleteWater()
+    except Exception:
+        pass
+
+    # 핵심: chain break로 생긴 segment C-terminus에 OXT 보정
+    try:
+        n_oxt = _ensure_oxt_for_all_segment_cterms(modeller)
+        if n_oxt:
+            print(f"[OpenMM] OXT 보정 적용: {n_oxt} residues")
+    except Exception as e:
+        print(f"[WARN] OXT 보정 실패(계속 진행): {e}")
+
+    # ForceField 로드: implicit solvent xml을 포함해두고,
+    # createSystem에서 implicitSolvent 인자가 'unused'로 뜨면 자동으로 빼고 재시도
+    ff_candidates = [
+        ("amber14-all.xml + implicit/obc2.xml", lambda: app.ForceField("amber14-all.xml", "implicit/obc2.xml")),
+        ("amber14-all.xml", lambda: app.ForceField("amber14-all.xml")),
+    ]
+
+    last_err = None
+    ff = None
+
+    for ff_name, ff_builder in ff_candidates:
+        try:
+            ff = ff_builder()
+            print(f"[OpenMM] ForceField: {ff_name}")
+            # 수소 추가는 템플릿 매칭 단계이기도 해서, 여기서 터지면 원인 파악이 쉬움
+            modeller.addHydrogens(ff)
+            break
+        except Exception as e:
+            last_err = e
+            ff = None
+            print(f"[WARN] ForceField/수소추가 실패({ff_name}) → 다음 후보로: {e}")
+
+    if ff is None:
+        raise RuntimeError(f"ForceField 로드/수소추가 실패: {last_err}")
+
+    # System 생성 (implicitSolvent 사용 시도 → unused 에러면 제거 후 재시도)
+    def _create_system(ignore_external_bonds: bool):
+        kwargs = dict(
+            nonbondedMethod=app.NoCutoff,
+            constraints=app.HBonds,
+            ignoreExternalBonds=ignore_external_bonds,
+        )
+        # implicit solvent를 사용하려면 보통 implicitSolvent를 넣지만,
+        # 버전/FF 조합에 따라 'never used' 에러가 날 수 있어 자동 폴백
+        try:
+            return ff.createSystem(modeller.topology, implicitSolvent=app.OBC2, **kwargs)
+        except Exception as e:
+            msg = str(e)
+            if "implicitSolvent" in msg and ("never used" in msg or "was never used" in msg):
+                return ff.createSystem(modeller.topology, **kwargs)
+            raise
+
+    try:
+        system = _create_system(ignore_external_bonds=False)
+    except Exception as e:
+        # 마지막 안전장치: external bond(예: chain break 주변) 무시하고 템플릿 매칭 완화
+        print(f"[WARN] createSystem 실패 → ignoreExternalBonds=True로 재시도: {e}")
+        system = _create_system(ignore_external_bonds=True)
 
     # Backbone(Cα, N, C)에 positional restraint 추가
     restraint = openmm.CustomExternalForce(
@@ -1030,41 +1142,63 @@ def openmm_minimize_and_md(
         restraint.addParticle(idx, (pos_nm[0], pos_nm[1], pos_nm[2]))
     system.addForce(restraint)
 
-    platform = _get_openmm_platform()
-    if platform is None:
-        raise RuntimeError("OpenMM platform(CUDA/OpenCL/CPU)을 찾지 못했습니다.")
-
     temperature = 300.0 * unit.kelvin
     friction = 1.0 / unit.picosecond
     dt = timestep_fs * unit.femtoseconds
-
     integrator = openmm.LangevinMiddleIntegrator(temperature, friction, dt)
-    simulation = app.Simulation(modeller.topology, system, integrator, platform)
-    simulation.context.setPositions(positions)
+
+    # GPU 우선 시도 → 실패 시 CPU 폴백
+    platform_attempts = [
+        ("CUDA", {"Precision": "mixed"}),
+        ("OpenCL", {"Precision": "mixed"}),
+        ("CPU", {}),
+    ]
+
+    sim = None
+    last_platform_err = None
+    for pname, props in platform_attempts:
+        try:
+            platform = openmm.Platform.getPlatformByName(pname)
+        except Exception:
+            continue
+
+        try:
+            print(f"[OpenMM] Platform 시도: {pname}")
+            sim = app.Simulation(modeller.topology, system, integrator, platform, props if props else None)
+            sim.context.setPositions(positions)
+            last_platform_err = None
+            break
+        except Exception as e:
+            last_platform_err = e
+            sim = None
+            print(f"[WARN] Platform {pname} 실패 → 다음 플랫폼으로: {e}")
+
+    if sim is None:
+        raise RuntimeError(f"OpenMM Simulation 생성 실패: {last_platform_err}")
 
     # 1) 에너지 minimization
     print("[OpenMM] 에너지 minimization 수행 (maxIterations=2000)")
-    simulation.minimizeEnergy(maxIterations=2000)
+    sim.minimizeEnergy(maxIterations=2000)
 
     # 2) 짧은 MD
     n_steps = int(md_time_ps * 1000.0 / timestep_fs)  # ps → fs → step
     print(f"[OpenMM] short MD 수행: {md_time_ps} ps, timestep={timestep_fs} fs, steps={n_steps}")
-    simulation.context.setVelocitiesToTemperature(temperature)
-    simulation.step(n_steps)
+    sim.context.setVelocitiesToTemperature(temperature)
+    sim.step(n_steps)
 
-    state = simulation.context.getState(getPositions=True)
+    state = sim.context.getState(getPositions=True)
     final_positions = state.getPositions()
 
     with open(out_pdb, "w") as f:
         app.PDBFile.writeFile(modeller.topology, final_positions, f)
 
     # 메모리 정리
-    del simulation, system, integrator
+    del sim, system, integrator
+    import gc
     gc.collect()
 
     print(f"[OpenMM] refinement 완료 → {out_pdb}")
     return out_pdb
-
 
 def run_rosetta_relax(in_pdb: Path, out_pdb: Path, work_dir: Path, nstruct: int = 1):
     """
