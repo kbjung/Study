@@ -5,16 +5,20 @@ pepbind_pipeline.py - WSL/오프라인 환경용 통합 파이프라인 (정리 
 구성:
 - STEP 2: PepMLM(ESM-2)로 펩타이드 후보 생성 (GPU 사용)
 - STEP 3: ColabFold 멀티머로 타깃-펩타이드 복합체 구조 예측 (진행 상황 표시)
+- STEP 3b: OpenMM 복합체 구조 수정
 - STEP 4: AutoDock Vina 도킹 (CPU, stdout 파싱)
 - STEP 5: PLIP 상호작용 분석
 - STEP 6: PRODIGY 결합 자유에너지 평가
 - STEP 7: 최종 평가(A안 가중치) + 엑셀 파일 생성 + rank_001 PDB zip 압축
 
-A안 가중치:
+가중치:
   PRODIGY 0.50
   Vina    0.25
   PLIP    0.15
   ipTM    0.10
+
+커널:
+pepbind_openmm
 """
 
 import os
@@ -65,7 +69,7 @@ TARGET_SEQUENCE = (
 )
 
 # 2) 생성할 펩타이드 설정
-NUM_PEPTIDES   = 10   # 생성할 펩타이드 후보 개수
+NUM_PEPTIDES   = 100   # 생성할 펩타이드 후보 개수
 PEPTIDE_LENGTH = 4    # 각 펩타이드 길이 (아미노산 개수)
 
 # 3) ColabFold / 평가 단계 사용 여부
