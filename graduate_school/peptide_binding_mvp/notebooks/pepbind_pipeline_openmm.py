@@ -1352,13 +1352,18 @@ def openmm_minimize_and_md(
     dt = timestep_fs * unit.femtoseconds
     integrator = openmm.LangevinMiddleIntegrator(temperature, friction, dt)
 
-    # platform에 따라 properties 설정(가능하면)
+    
+# platform에 따라 properties 설정(가능하면)
+properties = {}
+try:
+    pname = platform.getName()
+    if pname == "CUDA":
+        properties = {"CudaPrecision": "mixed"}  # mixed가 보통 빠르고 안정적
+    elif pname == "OpenCL":
+        properties = {"OpenCLPrecision": "mixed"}
+    # HIP/Metal 등은 환경별로 property 키가 다를 수 있어 기본값 사용
+except Exception:
     properties = {}
-    try:
-        if platform.getName() == "CUDA":
-            properties = {"Precision": "mixed"}
-    except Exception:
-        properties = {}
 
     def _make_sim(plat, props):
         return app.Simulation(modeller.topology, system, integrator, plat, props)
