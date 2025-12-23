@@ -4,7 +4,6 @@ pepbind_pipeline.py - WSL/오프라인 환경용 통합 파이프라인 (정리 
 구성:
 - STEP 2: PepMLM(ESM-2)로 펩타이드 후보 생성 (GPU 사용)
 - STEP 3: ColabFold 멀티머로 타깃-펩타이드 복합체 구조 예측 (진행 상황 표시)
-- STEP 3b: OpenMM으로 복합체 구조 튜닝
 - STEP 4: AutoDock Vina 도킹 (CPU, stdout 파싱)
 - STEP 5: PLIP 상호작용 분석
 - STEP 6: PRODIGY 결합 자유에너지 평가
@@ -979,137 +978,6 @@ def _get_openmm_platform():
     return None
 
 
-def _ensure_cterm_oxt(in_pdb: Path, out_pdb: Path) -> Path:
-    """
-    OpenMM Amber forcefield가 C-terminus 템플릿을 적용할 때 OXT가 필요해서
-    ColabFold/AF PDB에 OXT가 없으면 template mismatch가 발생할 수 있음.
-    → 각 체인 마지막 residue에 OXT가 없으면, 기존 O 원자를 복제해서 OXT를 추가한다.
-    (좌표는 O와 동일하게 복제: 템플릿 매칭 목적의 최소 패치)
-    """
-    lines = Path(in_pdb).read_text().splitlines()
-
-    # ATOM/HETATM 라인만 대상으로 체인별 마지막 residue를 찾는다
-    atom_idxs = []
-    max_serial = 0
-
-    def _is_atom_line(line: str) -> bool:
-        rec = line[0:6].strip()
-        return rec in ("ATOM", "HETATM")
-
-    def _parse_serial(line: str) -> int:
-        try:
-            return int(line[6:11])
-        except Exception:
-            return 0
-
-    def _atom_name(line: str) -> str:
-        return line[12:16].strip()
-
-    def _res_key(line: str):
-        # (chainID, resSeq, iCode, resName)
-        chain = line[21].strip() if len(line) > 21 else ""
-        resseq = line[22:26].strip()
-        icode = line[26].strip() if len(line) > 26 else ""
-        resname = line[17:20].strip()
-        return (chain, resseq, icode, resname)
-
-    # chain별 마지막 residue key 저장
-    last_res_by_chain = {}
-    # residue별 atom name set 저장
-    atoms_in_res = {}
-
-    for i, line in enumerate(lines):
-        if not _is_atom_line(line):
-            continue
-        atom_idxs.append(i)
-        max_serial = max(max_serial, _parse_serial(line))
-
-        rk = _res_key(line)
-        chain = rk[0]
-        last_res_by_chain[chain] = rk
-        atoms_in_res.setdefault(rk, set()).add(_atom_name(line))
-
-    if not last_res_by_chain:
-        # 원자 라인이 없으면 그대로 복사
-        Path(out_pdb).write_text("\n".join(lines) + "\n")
-        return out_pdb
-
-    # 삽입할 OXT 라인들: (삽입 index, 라인 문자열)
-    inserts = []
-
-    for chain, rk in last_res_by_chain.items():
-        # 이미 OXT가 있으면 스킵
-        if "OXT" in atoms_in_res.get(rk, set()):
-            continue
-
-        # 해당 residue의 마지막 ATOM 라인을 찾아서 그 뒤에 OXT 삽입
-        # 가능하면 'O' 라인을 복제해서 atom name만 OXT로 바꿈
-        idxs = [i for i in atom_idxs if _res_key(lines[i]) == rk]
-        if not idxs:
-            continue
-
-        # 우선 O 원자 라인 찾기
-        o_line_idx = None
-        for i in idxs:
-            if _atom_name(lines[i]) == "O":
-                o_line_idx = i
-                break
-        base_idx = o_line_idx if o_line_idx is not None else idxs[-1]
-        base_line = lines[base_idx]
-
-        max_serial += 1
-        # PDB fixed-width 유지하면서 atom name만 OXT로 변경
-        # serial(6:11), atom name(12:16), element(76:78) 보강
-        new_line = list(base_line)
-        # serial
-        serial_str = f"{max_serial:5d}"
-        new_line[6:11] = list(serial_str)
-        # atom name field: 4 chars, right/left 정렬 이슈를 피하려면 " OXT" 권장
-        new_line[12:16] = list(f"{'OXT':>4}")
-        # element
-        if len(new_line) < 78:
-            new_line += [" "] * (78 - len(new_line))
-        new_line[76:78] = list(" O")  # element O
-        new_line = "".join(new_line)
-
-        inserts.append((base_idx + 1, new_line))
-
-    if not inserts:
-        Path(out_pdb).write_text("\n".join(lines) + "\n")
-        return out_pdb
-
-    # 여러 삽입이 있을 수 있으니 index 큰 것부터 삽입
-    inserts.sort(key=lambda x: x[0], reverse=True)
-    for insert_at, new_line in inserts:
-        lines.insert(insert_at, new_line)
-
-    Path(out_pdb).write_text("\n".join(lines) + "\n")
-    return out_pdb
-
-
-def _openmm_data_dir() -> Path:
-    # openmm.app 패키지의 data 디렉토리
-    return Path(app.__file__).resolve().parent / "data"
-
-def _pick_implicit_solvent_xml() -> str | None:
-    data_dir = _openmm_data_dir()
-
-    # OpenMM 설치/버전에 따라 파일명이 조금씩 달라서 후보를 여러 개 둠
-    candidates = [
-        "amber14/implicit/obc2.xml",
-        "amber14/implicit/obc1.xml",
-        "implicit/obc2.xml",
-        "implicit/obc1.xml",
-        "amber14-obc.xml",
-        "amber14_gbsa.xml",
-    ]
-
-    for rel in candidates:
-        if (data_dir / rel).exists():
-            return rel
-    return None
-
-
 def openmm_minimize_and_md(
     in_pdb: Path,
     out_pdb: Path,
@@ -1128,32 +996,9 @@ def openmm_minimize_and_md(
 
     print(f"[OpenMM] 입력 구조: {in_pdb.name}")
 
-    # OpenMM 템플릿 매칭 실패 방지용: C-terminus OXT 보강
-    patched_in = in_pdb.parent / f"{in_pdb.stem}__oxt.pdb"
-    try:
-        _ensure_cterm_oxt(in_pdb, patched_in)
-        use_pdb_path = patched_in
-    except Exception as e:
-        print(f"[WARN] OXT 보강 실패(원본 사용): {e}")
-        use_pdb_path = in_pdb
-
-    pdb = app.PDBFile(str(use_pdb_path))
-
-    # ForceField
-    implicit_xml = _pick_implicit_solvent_xml()
-    if implicit_xml is None:
-        # 여기서 조용히 vacuum으로 진행하면 결과 품질이 애매해져서,
-        # 나는 명확히 에러로 끊는 걸 추천함.
-        data_dir = _openmm_data_dir()
-        raise RuntimeError(
-            "OpenMM implicit solvent XML을 찾지 못했습니다.\n"
-            f"- OpenMM data dir: {data_dir}\n"
-            "- data 폴더 내 implicit/ 또는 amber14/implicit/ 아래 xml 존재 여부 확인 필요\n"
-            "- (대안) explicit solvent로 돌리거나, implicitSolvent 인자를 제거해야 합니다."
-        )
-
-    print(f"[OpenMM] ForceField: amber14-all.xml + {implicit_xml}")
-    ff = app.ForceField("amber14-all.xml", implicit_xml)
+    pdb = app.PDBFile(str(in_pdb))
+    # 필요에 따라 amber99sb.xml 등으로 변경 가능
+    ff = app.ForceField("amber14-all.xml")
 
     modeller = app.Modeller(pdb.topology, pdb.positions)
     # 수소 자동 추가
@@ -1163,7 +1008,6 @@ def openmm_minimize_and_md(
         modeller.topology,
         nonbondedMethod=app.NoCutoff,
         constraints=app.HBonds,
-        implicitSolvent=app.OBC2, # 이제 이 인자를 실제로 소비하는 generator가 존재
     )
 
     # Backbone(Cα, N, C)에 positional restraint 추가
@@ -1243,7 +1087,7 @@ def run_rosetta_relax(in_pdb: Path, out_pdb: Path, work_dir: Path, nstruct: int 
     ]
 
     print("[RUN]", " ".join(cmd))
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
     with open(log_file, "w", encoding="utf-8") as lf:
         lf.write("=== STDOUT ===\n")
@@ -1897,7 +1741,7 @@ def run_plip_on_rank1(rank1_pdbs, plip_dir: Path):
         ]
         print("[RUN]", " ".join(cmd_list))
 
-        result = subprocess.run(cmd_list, capture_output=True, text=True)
+        result = subprocess.run(cmd_list, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
         with open(log_file, "w", encoding="utf-8") as lf:
             lf.write("=== STDOUT ===\n")
@@ -1980,7 +1824,7 @@ def run_prodigy_on_rank1(rank1_pdbs, out_dir: Path) -> pd.DataFrame:
             "--selection", rec_chain, lig_chain,
         ]
         print(f"[RUN] {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
         # stdout / stderr 저장
         out_txt.write_text(result.stdout or "", encoding="utf-8")
@@ -2227,36 +2071,47 @@ def load_prodigy_scores(prodigy_dir: Path):
     return scores, statuses
 
 
-def _strip_refine_suffix(stem: str) -> str:
-    for suf in ("_openmm_refined", "_relax"):
-        if stem.endswith(suf):
-            stem = stem[:-len(suf)]
-    return stem
-
-
 def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs):
     """
     ColabFold 출력 폴더에서 ipTM 값을 최대한 유연하게 찾는다.
 
-    - 각 rank_001 PDB의 stem(base)를 기준으로
-      1) base*scores*.json
-      2) base_prefix*scores*.json  (base에서 '_unrelaxed' 앞부분)
-      3) base*_ranking_debug.json, base_prefix*_ranking_debug.json, ranking_debug.json
-    에서 'iptm' 또는 'iptm+ptm' 키를 찾아본다.
+    - 일반 rank_001 PDB의 stem(base)을 기준으로:
+        1) base*scores*.json
+        2) base_prefix*scores*.json  (base에서 '_unrelaxed' 앞부분)
+        3) base*_ranking_debug.json, base_prefix*_ranking_debug.json, ranking_debug.json
+      에서 'iptm' 또는 'iptm+ptm' 키를 찾아본다.
+
+    - OpenMM/Rosetta 후처리로 파일명이 변한 경우도 지원:
+        예) ..._openmm_refined.pdb, ..._relax.pdb, ..._openmm_refined_relax.pdb
+      → 원본 stem을 추정(orig_stem)해서 json을 찾고,
+        iptms[orig_stem] 과 iptms[base] 둘 다에 같은 값을 기록한다.
     """
     iptms = {}
     if not colabfold_out_dir.exists():
         return iptms
 
+    refine_suffixes = ("_relax", "_openmm_refined", "_openmm", "_refined")
+
     for pdb in rank1_pdbs:
-        # base = pdb.stem
-        base = _strip_refine_suffix(pdb.stem)
-        prefix = base.split("_unrelaxed")[0]
+        base = pdb.stem  # 현재 사용 PDB stem (후처리 suffix 포함 가능)
+
+        # 0) 원본 stem 추정: 뒤에 붙은 suffix를 반복 제거
+        orig_stem = base
+        changed = True
+        while changed:
+            changed = False
+            for suf in refine_suffixes:
+                if orig_stem.endswith(suf):
+                    orig_stem = orig_stem[: -len(suf)]
+                    changed = True
+
+        # ColabFold id prefix는 보통 '_unrelaxed' 이전까지
+        prefix = orig_stem.split("_unrelaxed")[0]
 
         found_val = None
 
-        # 1) scores*.json 후보들
-        candidates = list(colabfold_out_dir.glob(f"{base}*scores*.json"))
+        # 1) scores*.json 후보들 (원본 stem 기준)
+        candidates = list(colabfold_out_dir.glob(f"{orig_stem}*scores*.json"))
         if not candidates:
             candidates = list(colabfold_out_dir.glob(f"{prefix}*scores*.json"))
 
@@ -2280,7 +2135,7 @@ def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs):
         # 2) ranking_debug 후보들
         if found_val is None:
             rd_candidates = [
-                colabfold_out_dir / f"{base}_ranking_debug.json",
+                colabfold_out_dir / f"{orig_stem}_ranking_debug.json",
                 colabfold_out_dir / f"{prefix}_ranking_debug.json",
                 colabfold_out_dir / "ranking_debug.json",
             ]
@@ -2300,6 +2155,8 @@ def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs):
                         break
 
         if found_val is not None:
+            # 원본/후처리 stem 둘 다 키로 저장
+            iptms[orig_stem] = found_val
             iptms[base] = found_val
 
     print(f"[INFO] ipTM 값을 읽어온 구조 수: {len(iptms)} / {len(rank1_pdbs)}")
