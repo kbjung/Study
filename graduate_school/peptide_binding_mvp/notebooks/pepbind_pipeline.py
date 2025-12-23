@@ -2,24 +2,35 @@
 pepbind_pipeline.py - WSL/오프라인 환경용 통합 파이프라인 (정리 버전)
 원본: pepbind_pipeline_openmm06.py
 
-구성:
+구성
+- STEP 1: 입력/경로 설정 (타깃 단백질, 작업 폴더, 외부 툴 경로)
 - STEP 2: PepMLM(ESM-2)로 펩타이드 후보 생성 (GPU 사용)
 - STEP 3: ColabFold 멀티머로 타깃-펩타이드 복합체 구조 예측 (진행 상황 표시)
-- STEP 3b: OpenMM 복합체 구조 수정
+- STEP 3b: OpenMM 복합체 구조 후처리(minimize + short MD, 가능하면 GPU → 실패 시 CPU 폴백)
 - STEP 4: AutoDock Vina 도킹 (CPU, stdout 파싱)
 - STEP 5: PLIP 상호작용 분석
 - STEP 6: PRODIGY 결합 자유에너지 평가
-- STEP 7: 최종 평가(A안 가중치) + 엑셀 파일 생성 + rank_001 PDB zip 압축
+- STEP 7: 최종 평가(가중치) + 엑셀 파일 생성 + rank_001 PDB zip 압축
 
-가중치:
+입력/출력
+- 입력: ColabFold output 폴더(rank_001 PDB + scores*.json 또는 ranking_debug.json)
+- 출력: DST_ROOT(workspace)/ 아래에 pdb/refined(OpenMM 결과), vina/plip/prodigy/results 등이 생성됨
+  - ColabFold 원본 PDB는 수정하지 않고, OpenMM refined PDB는 별도 폴더(pdb/refined)에 저장됨
+
+가중치
   PRODIGY 0.50
   Vina    0.25
   PLIP    0.15
   ipTM    0.10
 
-커널:
-pepbind_openmm
+옵션
+- Rosetta Relax: RELAX_CMD 설정 시에만 실행(미설정이면 스킵)
+
+권장 실행 환경
+- conda env: pepbind_openmm (Python 3.11)
+- Jupyter kernel: pepbind_openmm (동일 env에 연결)
 """
+
 
 import os
 import time
