@@ -1,20 +1,36 @@
 """
 pepbind_pipeline.py - WSL/오프라인 환경용 통합 파이프라인 (정리 버전)
+원본: pepbind_pipeline_openmm06.py
 
-구성:
+구성
+- STEP 1: 입력/경로 설정 (타깃 단백질, 작업 폴더, 외부 툴 경로)
 - STEP 2: PepMLM(ESM-2)로 펩타이드 후보 생성 (GPU 사용)
 - STEP 3: ColabFold 멀티머로 타깃-펩타이드 복합체 구조 예측 (진행 상황 표시)
+- STEP 3b: OpenMM 복합체 구조 후처리(minimize + short MD, 가능하면 GPU → 실패 시 CPU 폴백)
 - STEP 4: AutoDock Vina 도킹 (CPU, stdout 파싱)
 - STEP 5: PLIP 상호작용 분석
 - STEP 6: PRODIGY 결합 자유에너지 평가
-- STEP 7: 최종 평가(A안 가중치) + 엑셀 파일 생성 + rank_001 PDB zip 압축
+- STEP 7: 최종 평가(가중치) + 엑셀 파일 생성 + rank_001 PDB zip 압축
 
-A안 가중치:
+입력/출력
+- 입력: ColabFold output 폴더(rank_001 PDB + scores*.json 또는 ranking_debug.json)
+- 출력: DST_ROOT(workspace)/ 아래에 pdb/refined(OpenMM 결과), vina/plip/prodigy/results 등이 생성됨
+  - ColabFold 원본 PDB는 수정하지 않고, OpenMM refined PDB는 별도 폴더(pdb/refined)에 저장됨
+
+가중치
   PRODIGY 0.50
   Vina    0.25
   PLIP    0.15
   ipTM    0.10
+
+옵션
+- Rosetta Relax: RELAX_CMD 설정 시에만 실행(미설정이면 스킵)
+
+권장 실행 환경
+- conda env: pepbind_openmm (Python 3.11)
+- Jupyter kernel: pepbind_openmm (동일 env에 연결)
 """
+
 
 import os
 import time
@@ -64,7 +80,7 @@ TARGET_SEQUENCE = (
 )
 
 # 2) 생성할 펩타이드 설정
-NUM_PEPTIDES   = 10   # 생성할 펩타이드 후보 개수
+NUM_PEPTIDES   = 100   # 생성할 펩타이드 후보 개수
 PEPTIDE_LENGTH = 4    # 각 펩타이드 길이 (아미노산 개수)
 
 # 3) ColabFold / 평가 단계 사용 여부
@@ -1003,65 +1019,6 @@ def _get_openmm_platform(prefer_gpu: bool = True):
 
 
 
-def _ensure_oxt_for_all_segment_cterms(modeller: app.Modeller) -> int:
-    """
-    ColabFold/AlphaFold PDB에서 chain break(결측 잔기)로 인해
-    'C-terminus인데 OXT가 없는' 잔기가 생기면 OpenMM ForceField 템플릿 매칭이 실패한다.
-
-    이 함수는 각 residue의 C 원자가 다른 residue의 N과 외부결합(peptide bond)을 갖지 않는 경우
-    해당 residue를 segment C-terminus로 간주하고, OXT 원자를 추가한다.
-    (이미 OXT가 있으면 스킵)
-    """
-    top = modeller.topology
-    pos = list(modeller.positions)
-
-    # adjacency (atom -> bonded atoms)
-    adj = {}
-    for a1, a2 in top.bonds():
-        adj.setdefault(a1, []).append(a2)
-        adj.setdefault(a2, []).append(a1)
-
-    added = 0
-    for chain in top.chains():
-        for res in chain.residues():
-            atoms = list(res.atoms())
-            if any(a.name == "OXT" for a in atoms):
-                continue
-
-            atomC = next((a for a in atoms if a.name == "C"), None)
-            atomO = next((a for a in atoms if a.name == "O"), None)
-            if atomC is None or atomO is None:
-                continue
-
-            # C가 다른 residue의 N과 결합이 없으면: segment C-terminus (chain end 또는 chain break)
-            bonded = adj.get(atomC, [])
-            has_external_N = any((nb.name == "N") and (nb.residue is not res) for nb in bonded)
-            if has_external_N:
-                continue
-
-            # OXT 좌표 추정: C->O 방향의 반대쪽에 C-O 길이(약 1.23 Å)만큼 배치
-            c_nm = pos[atomC.index].value_in_unit(unit.nanometer)
-            o_nm = pos[atomO.index].value_in_unit(unit.nanometer)
-            vx, vy, vz = (c_nm[0] - o_nm[0], c_nm[1] - o_nm[1], c_nm[2] - o_nm[2])
-            norm = (vx * vx + vy * vy + vz * vz) ** 0.5
-            if norm < 1e-8:
-                # 극단적 케이스: 임의 방향
-                vx, vy, vz = (1.0, 0.0, 0.0)
-                norm = 1.0
-            vx, vy, vz = (vx / norm, vy / norm, vz / norm)
-
-            bond_len_nm = 0.123  # 1.23 Å
-            new_nm = (c_nm[0] + bond_len_nm * vx, c_nm[1] + bond_len_nm * vy, c_nm[2] + bond_len_nm * vz)
-
-            new_atom = top.addAtom("OXT", app.element.oxygen, res)
-            top.addBond(atomC, new_atom)
-            pos.append(openmm.Vec3(*new_nm) * unit.nanometer)
-            added += 1
-
-    if added:
-        modeller.positions = pos
-    return added
-
 def _write_pdb_with_missing_oxt(in_pdb: Path, out_pdb: Path) -> Path:
     """
     AlphaFold/ColabFold PDB는 C-말단 OXT가 없는 경우가 흔하다.
@@ -1278,6 +1235,8 @@ def openmm_minimize_and_md(
 
     print(f"[OpenMM] 입력 구조: {in_pdb.name}")
 
+    out_pdb.parent.mkdir(parents=True, exist_ok=True)
+
     # 0) OXT 보정 (파일 레벨, Topology 중간삽입 금지 이슈 회피)
     prep_pdb = out_pdb.parent / f"{in_pdb.stem}__openmm_prep.pdb"
     fixed_in = _write_pdb_with_missing_oxt(in_pdb, prep_pdb)
@@ -1286,7 +1245,6 @@ def openmm_minimize_and_md(
     pdb = app.PDBFile(str(fixed_in))
 
     # 2) ForceField 후보들: (xml 목록, 설명)
-    #    - implicit/obc2는 XML로 forcefield에 포함하는 방식이 가장 안정적
     ff_candidates = [
         (["amber14-all.xml", "implicit/obc2.xml"], "amber14-all.xml + implicit/obc2.xml"),
         (["amber14-all.xml"], "amber14-all.xml"),
@@ -1304,9 +1262,7 @@ def openmm_minimize_and_md(
             modeller = app.Modeller(pdb.topology, pdb.positions)
 
             print(f"[OpenMM] ForceField: {desc}")
-            # 수소 자동 추가 (템플릿 매칭에서 가장 자주 터짐)
-            modeller.addHydrogens(ff)
-
+            modeller.addHydrogens(ff)  # 템플릿 매칭이 가장 자주 터지는 지점
             break
         except Exception as e:
             last_err = e
@@ -1319,7 +1275,6 @@ def openmm_minimize_and_md(
         raise RuntimeError(f"ForceField 로드/수소추가 실패: {last_err}")
 
     # 3) System 생성
-    #    implicit XML을 쓴 경우에도 nonbondedMethod/constraints 설정은 동일하게 적용
     system = ff.createSystem(
         modeller.topology,
         nonbondedMethod=app.NoCutoff,
@@ -1347,26 +1302,29 @@ def openmm_minimize_and_md(
     if platform is None:
         raise RuntimeError("OpenMM platform(CUDA/OpenCL/CPU)을 찾지 못했습니다.")
 
+    # platformProperties (가능하면)
+    properties = {}
+    try:
+        pname = platform.getName()
+        if pname == "CUDA":
+            properties = {"CudaPrecision": "mixed"}  # mixed가 보통 빠르고 안정적
+        elif pname == "OpenCL":
+            properties = {"OpenCLPrecision": "mixed"}
+        print(f"[OpenMM] Platform: {pname}")
+    except Exception:
+        properties = {}
+
     temperature = 300.0 * unit.kelvin
     friction = 1.0 / unit.picosecond
     dt = timestep_fs * unit.femtoseconds
     integrator = openmm.LangevinMiddleIntegrator(temperature, friction, dt)
 
-    
-# platform에 따라 properties 설정(가능하면)
-properties = {}
-try:
-    pname = platform.getName()
-    if pname == "CUDA":
-        properties = {"CudaPrecision": "mixed"}  # mixed가 보통 빠르고 안정적
-    elif pname == "OpenCL":
-        properties = {"OpenCLPrecision": "mixed"}
-    # HIP/Metal 등은 환경별로 property 키가 다를 수 있어 기본값 사용
-except Exception:
-    properties = {}
-
     def _make_sim(plat, props):
-        return app.Simulation(modeller.topology, system, integrator, plat, props)
+        # OpenMM 버전에 따라 platformProperties 인자 처리 방식이 다를 수 있어 TypeError를 방어
+        try:
+            return app.Simulation(modeller.topology, system, integrator, plat, props)
+        except TypeError:
+            return app.Simulation(modeller.topology, system, integrator, plat)
 
     try:
         simulation = _make_sim(platform, properties)
@@ -1375,6 +1333,10 @@ except Exception:
         platform = _get_openmm_platform(prefer_gpu=False)
         if platform is None:
             raise
+        try:
+            print(f"[OpenMM] Platform(fallback): {platform.getName()}")
+        except Exception:
+            pass
         simulation = _make_sim(platform, {})
 
     simulation.context.setPositions(positions)
@@ -1392,7 +1354,7 @@ except Exception:
     state = simulation.context.getState(getPositions=True)
     final_positions = state.getPositions()
 
-    with open(out_pdb, "w") as f:
+    with open(out_pdb, "w", encoding="utf-8") as f:
         app.PDBFile.writeFile(modeller.topology, final_positions, f)
 
     # 메모리 정리
