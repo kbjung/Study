@@ -964,18 +964,43 @@ def run_colabfold_batch_with_progress(
 # === STEP 3b: ColabFold 출력 구조 후처리 (OpenMM minimization / MD / Rosetta Relax)
 # =====================================================================
 
-def _get_openmm_platform():
+def _get_openmm_platform(prefer_gpu: bool = True):
     """
-    사용 가능한 OpenMM platform을 CUDA → OpenCL → CPU 순서로 선택.
+    OpenMM Platform 선택.
+
+    - prefer_gpu=True  : CUDA → OpenCL → HIP → Metal → CPU → Reference 순으로 시도
+    - prefer_gpu=False : CPU → Reference → CUDA → OpenCL → HIP → Metal 순으로 시도
+
+    반환: Platform 객체 또는 None
     """
     if not _OPENMM_AVAILABLE:
         return None
-    for name in ("CUDA", "OpenCL", "CPU"):
+
+    # OpenMM 8+: openmm.Platform, legacy: simtk.openmm.Platform
+    try:
+        from openmm import Platform
+    except Exception:
         try:
-            return openmm.Platform.getPlatformByName(name)
+            from simtk.openmm import Platform  # type: ignore
         except Exception:
-            continue
+            return None
+
+    gpu = ["CUDA", "OpenCL", "HIP", "Metal"]
+    cpu = ["CPU", "Reference"]
+    order = (gpu + cpu) if prefer_gpu else (cpu + gpu)
+
+    last_err = None
+    for name in order:
+        try:
+            plat = Platform.getPlatformByName(name)
+            return plat
+        except Exception as e:
+            last_err = e
+
+    if last_err is not None:
+        print(f"[OpenMM] platform 선택 실패: {last_err}")
     return None
+
 
 
 def _ensure_oxt_for_all_segment_cterms(modeller: app.Modeller) -> int:
@@ -1037,6 +1062,201 @@ def _ensure_oxt_for_all_segment_cterms(modeller: app.Modeller) -> int:
         modeller.positions = pos
     return added
 
+def _write_pdb_with_missing_oxt(in_pdb: Path, out_pdb: Path) -> Path:
+    """
+    AlphaFold/ColabFold PDB는 C-말단 OXT가 없는 경우가 흔하다.
+    OpenMM ForceField는 C-말단 잔기(CTER) 템플릿에서 OXT를 기대하는 경우가 있어
+    'No template found ... Perhaps the chain is missing a terminal group?' 에러가 발생한다.
+
+    Topology에 중간 삽입(addAtom)은 'All atoms within a residue must be contiguous' 제약 때문에 실패할 수 있어,
+    여기서는 PDB 텍스트 레벨에서 OXT를 삽입한 뒤 OpenMM에 로드한다.
+
+    - 각 chain별로 residue 순서를 추적해 segment 끝(마지막 residue, 또는 resSeq gap)에서 OXT가 없으면 삽입
+    - 좌표는 C와 O를 이용해 C-O 방향의 반대쪽으로 1.24 Å만큼 연장하여 근사 생성
+    - CONECT는 OpenMM 템플릿 매칭을 방해할 수 있어 제거한다(필요 시 복원 가능)
+    """
+    try:
+        lines = in_pdb.read_text(encoding="utf-8", errors="ignore").splitlines(True)
+    except Exception:
+        return in_pdb
+
+    aa3 = {
+        "ALA","ARG","ASN","ASP","CYS","GLN","GLU","GLY","HIS","ILE",
+        "LEU","LYS","MET","PHE","PRO","SER","THR","TRP","TYR","VAL",
+        "SEC","PYL","MSE"  # MSE는 종종 등장
+    }
+
+    # 첫 MODEL만 처리(여러 MODEL이 있으면)
+    in_model = False
+    model_seen = False
+    kept = []
+    for ln in lines:
+        rec = ln[:6].strip()
+        if rec == "MODEL":
+            if model_seen:
+                break
+            model_seen = True
+            in_model = True
+            kept.append(ln)
+            continue
+        if rec == "ENDMDL":
+            kept.append(ln)
+            break
+        if rec == "CONECT":
+            # 템플릿 매칭 이슈 방지를 위해 제거
+            continue
+        kept.append(ln)
+
+    lines = kept
+
+    # residue 정보 수집
+    # key = (chain, resseq, icode)
+    res_info = {}
+    chain_order = {}  # chain -> [key1, key2, ...] (등장 순서)
+    max_serial = 0
+
+    def _safe_int(s):
+        try:
+            return int(s)
+        except Exception:
+            return None
+
+    def _safe_float(s):
+        try:
+            return float(s)
+        except Exception:
+            return None
+
+    for i, ln in enumerate(lines):
+        rec = ln[:6].strip()
+        if rec not in ("ATOM", "HETATM"):
+            continue
+
+        serial = _safe_int(ln[6:11].strip())
+        if serial is not None:
+            max_serial = max(max_serial, serial)
+
+        name = ln[12:16].strip()
+        resname = ln[17:20].strip()
+        chain = (ln[21] if len(ln) > 21 else " ").strip() or " "
+        resseq = _safe_int(ln[22:26].strip())
+        icode = (ln[26] if len(ln) > 26 else " ").strip() or " "
+        if resseq is None:
+            continue
+
+        # 단백질 잔기(표준 AA)만 대상으로 함
+        if resname not in aa3:
+            continue
+
+        key = (chain, resseq, icode)
+        if key not in res_info:
+            res_info[key] = {
+                "resname": resname,
+                "chain": chain,
+                "resseq": resseq,
+                "icode": icode,
+                "last_atom_idx": i,
+                "has_oxt": False,
+                "C": None,
+                "O": None,
+            }
+            chain_order.setdefault(chain, []).append(key)
+        else:
+            res_info[key]["last_atom_idx"] = i
+
+        if name == "OXT":
+            res_info[key]["has_oxt"] = True
+        elif name == "C":
+            x = _safe_float(ln[30:38]); y = _safe_float(ln[38:46]); z = _safe_float(ln[46:54])
+            if x is not None and y is not None and z is not None:
+                res_info[key]["C"] = (x, y, z)
+        elif name == "O":
+            x = _safe_float(ln[30:38]); y = _safe_float(ln[38:46]); z = _safe_float(ln[46:54])
+            if x is not None and y is not None and z is not None:
+                res_info[key]["O"] = (x, y, z)
+
+    # segment end 판단 (마지막 residue + resSeq gap)
+    seg_end_keys = set()
+    for chain, keys in chain_order.items():
+        for j, key in enumerate(keys):
+            is_last = (j == len(keys) - 1)
+            if is_last:
+                seg_end_keys.add(key)
+                continue
+            cur = key
+            nxt = keys[j + 1]
+            cur_seq = res_info[cur]["resseq"]
+            nxt_seq = res_info[nxt]["resseq"]
+            # 번호 gap이 있으면 segment break로 간주
+            if (nxt_seq is not None) and (cur_seq is not None) and (nxt_seq != cur_seq + 1):
+                seg_end_keys.add(cur)
+
+    # 삽입 대상 키
+    targets = [k for k in seg_end_keys if (k in res_info and not res_info[k]["has_oxt"])]
+    if not targets:
+        return in_pdb
+
+    # last_atom_idx 기준으로 정렬 (앞에서부터 삽입해야 index 보정 쉬움)
+    targets.sort(key=lambda k: res_info[k]["last_atom_idx"])
+
+    def _format_oxt_line(serial: int, resname: str, chain: str, resseq: int, icode: str, x: float, y: float, z: float) -> str:
+        # PDB fixed-width (ATOM)
+        # Columns: 1-6 "ATOM", 7-11 serial, 13-16 name, 18-20 resName, 22 chain, 23-26 resSeq, 27 iCode, 31-38 x, 39-46 y, 47-54 z
+        return (
+            f"ATOM  {serial:5d}  OXT {resname:>3s} {chain:1s}{resseq:4d}{icode:1s}"
+            f"   {x:8.3f}{y:8.3f}{z:8.3f}  1.00  0.00           O\n"
+        )
+
+    # 실제 삽입
+    out_lines = []
+    insert_map = {res_info[k]["last_atom_idx"]: [] for k in targets}
+
+    serial = max_serial + 1
+    for k in targets:
+        info = res_info[k]
+        C = info["C"]
+        O = info["O"]
+        if C is None or O is None:
+            # 좌표가 부족하면 그냥 C 근처에 둔다
+            x, y, z = (C if C is not None else (0.0, 0.0, 0.0))
+            x += 1.24
+        else:
+            cx, cy, cz = C
+            ox, oy, oz = O
+            vx, vy, vz = (cx - ox, cy - oy, cz - oz)
+            import math
+            norm = math.sqrt(vx*vx + vy*vy + vz*vz)
+            if norm < 1e-6:
+                vx, vy, vz = (1.0, 0.0, 0.0)
+                norm = 1.0
+            scale = 1.24 / norm
+            x, y, z = (cx + vx*scale, cy + vy*scale, cz + vz*scale)
+
+        insert_map[info["last_atom_idx"]].append(
+            _format_oxt_line(
+                serial=serial,
+                resname=info["resname"],
+                chain=info["chain"],
+                resseq=info["resseq"],
+                icode=info["icode"],
+                x=x, y=y, z=z,
+            )
+        )
+        serial += 1
+
+    for i, ln in enumerate(lines):
+        out_lines.append(ln)
+        if i in insert_map:
+            out_lines.extend(insert_map[i])
+
+    try:
+        out_pdb.write_text("".join(out_lines), encoding="utf-8")
+        print(f"[OpenMM] OXT 보정: {len(targets)}개 residue에 OXT 추가 → {out_pdb.name}")
+        return out_pdb
+    except Exception as e:
+        print(f"[WARN] OXT 보정 실패(계속 진행): {e}")
+        return in_pdb
+
 def openmm_minimize_and_md(
     in_pdb: Path,
     out_pdb: Path,
@@ -1047,88 +1267,68 @@ def openmm_minimize_and_md(
     """
     OpenMM을 이용해 단순한 에너지 minimization + 짧은 MD를 수행하는 함수.
 
-    - ForceField: amber14-all + implicit/obc2 (가능하면 적용)
-    - Backbone(Cα, N, C)에 position restraint를 걸고 짧게 MD
-    - GPU(CUDA/OpenCL) 우선 시도 → 실패 시 CPU로 자동 폴백
+    - ForceField: amber14-all + implicit solvent(OBC2) 우선 시도 → 실패 시 amber14-all 등으로 폴백
+    - AlphaFold/ColabFold PDB는 C-말단 OXT가 없어서 템플릿 매칭이 실패하는 경우가 흔해,
+      OpenMM 로드 전에 PDB 텍스트 레벨에서 OXT를 보정한다.
+    - Backbone(Cα, N, C)에 position restraint를 걸고 short MD.
+    - CUDA/OpenCL(가능하면 GPU) 우선 시도 → 실패 시 CPU로 폴백.
     """
     if not _OPENMM_AVAILABLE:
         raise RuntimeError("OpenMM이 설치되어 있지 않아 refinement를 수행할 수 없습니다.")
 
     print(f"[OpenMM] 입력 구조: {in_pdb.name}")
 
-    pdb = app.PDBFile(str(in_pdb))
-    modeller = app.Modeller(pdb.topology, pdb.positions)
+    # 0) OXT 보정 (파일 레벨, Topology 중간삽입 금지 이슈 회피)
+    prep_pdb = out_pdb.parent / f"{in_pdb.stem}__openmm_prep.pdb"
+    fixed_in = _write_pdb_with_missing_oxt(in_pdb, prep_pdb)
 
-    # (선택) 물/이온 제거 (ColabFold 출력에는 보통 없지만 안전장치)
-    try:
-        modeller.deleteWater()
-    except Exception:
-        pass
+    # 1) PDB 로드
+    pdb = app.PDBFile(str(fixed_in))
 
-    # 핵심: chain break로 생긴 segment C-terminus에 OXT 보정
-    try:
-        n_oxt = _ensure_oxt_for_all_segment_cterms(modeller)
-        if n_oxt:
-            print(f"[OpenMM] OXT 보정 적용: {n_oxt} residues")
-    except Exception as e:
-        print(f"[WARN] OXT 보정 실패(계속 진행): {e}")
-
-    # ForceField 로드: implicit solvent xml을 포함해두고,
-    # createSystem에서 implicitSolvent 인자가 'unused'로 뜨면 자동으로 빼고 재시도
+    # 2) ForceField 후보들: (xml 목록, 설명)
+    #    - implicit/obc2는 XML로 forcefield에 포함하는 방식이 가장 안정적
     ff_candidates = [
-        ("amber14-all.xml + implicit/obc2.xml", lambda: app.ForceField("amber14-all.xml", "implicit/obc2.xml")),
-        ("amber14-all.xml", lambda: app.ForceField("amber14-all.xml")),
+        (["amber14-all.xml", "implicit/obc2.xml"], "amber14-all.xml + implicit/obc2.xml"),
+        (["amber14-all.xml"], "amber14-all.xml"),
+        (["amber99sb.xml"], "amber99sb.xml"),
+        (["charmm36.xml"], "charmm36.xml"),
     ]
 
     last_err = None
+    modeller = None
     ff = None
 
-    for ff_name, ff_builder in ff_candidates:
+    for xmls, desc in ff_candidates:
         try:
-            ff = ff_builder()
-            print(f"[OpenMM] ForceField: {ff_name}")
-            # 수소 추가는 템플릿 매칭 단계이기도 해서, 여기서 터지면 원인 파악이 쉬움
+            ff = app.ForceField(*xmls)
+            modeller = app.Modeller(pdb.topology, pdb.positions)
+
+            print(f"[OpenMM] ForceField: {desc}")
+            # 수소 자동 추가 (템플릿 매칭에서 가장 자주 터짐)
             modeller.addHydrogens(ff)
+
             break
         except Exception as e:
             last_err = e
+            print(f"[WARN] ForceField/수소추가 실패({desc}) → 다음 후보로: {e}")
+            modeller = None
             ff = None
-            print(f"[WARN] ForceField/수소추가 실패({ff_name}) → 다음 후보로: {e}")
+            continue
 
-    if ff is None:
+    if modeller is None or ff is None:
         raise RuntimeError(f"ForceField 로드/수소추가 실패: {last_err}")
 
-    # System 생성 (implicitSolvent 사용 시도 → unused 에러면 제거 후 재시도)
-    def _create_system(ignore_external_bonds: bool):
-        kwargs = dict(
-            nonbondedMethod=app.NoCutoff,
-            constraints=app.HBonds,
-            ignoreExternalBonds=ignore_external_bonds,
-        )
-        # implicit solvent를 사용하려면 보통 implicitSolvent를 넣지만,
-        # 버전/FF 조합에 따라 'never used' 에러가 날 수 있어 자동 폴백
-        try:
-            return ff.createSystem(modeller.topology, implicitSolvent=app.OBC2, **kwargs)
-        except Exception as e:
-            msg = str(e)
-            if "implicitSolvent" in msg and ("never used" in msg or "was never used" in msg):
-                return ff.createSystem(modeller.topology, **kwargs)
-            raise
-
-    try:
-        system = _create_system(ignore_external_bonds=False)
-    except Exception as e:
-        # 마지막 안전장치: external bond(예: chain break 주변) 무시하고 템플릿 매칭 완화
-        print(f"[WARN] createSystem 실패 → ignoreExternalBonds=True로 재시도: {e}")
-        system = _create_system(ignore_external_bonds=True)
-
-    # Backbone(Cα, N, C)에 positional restraint 추가
-    restraint = openmm.CustomExternalForce(
-        "0.5*k*((x-x0)^2 + (y-y0)^2 + (z-z0)^2)"
+    # 3) System 생성
+    #    implicit XML을 쓴 경우에도 nonbondedMethod/constraints 설정은 동일하게 적용
+    system = ff.createSystem(
+        modeller.topology,
+        nonbondedMethod=app.NoCutoff,
+        constraints=app.HBonds,
     )
-    restraint.addGlobalParameter(
-        "k", restraint_k * (unit.kilocalories_per_mole / unit.angstroms**2)
-    )
+
+    # 4) Backbone(Cα, N, C)에 positional restraint 추가
+    restraint = openmm.CustomExternalForce("0.5*k*((x-x0)^2 + (y-y0)^2 + (z-z0)^2)")
+    restraint.addGlobalParameter("k", restraint_k * (unit.kilocalories_per_mole / unit.angstroms**2))
     restraint.addPerParticleParameter("x0")
     restraint.addPerParticleParameter("y0")
     restraint.addPerParticleParameter("z0")
@@ -1142,59 +1342,56 @@ def openmm_minimize_and_md(
         restraint.addParticle(idx, (pos_nm[0], pos_nm[1], pos_nm[2]))
     system.addForce(restraint)
 
+    # 5) 플랫폼 선택: GPU 우선 → 실패 시 CPU
+    platform = _get_openmm_platform(prefer_gpu=True)
+    if platform is None:
+        raise RuntimeError("OpenMM platform(CUDA/OpenCL/CPU)을 찾지 못했습니다.")
+
     temperature = 300.0 * unit.kelvin
     friction = 1.0 / unit.picosecond
     dt = timestep_fs * unit.femtoseconds
     integrator = openmm.LangevinMiddleIntegrator(temperature, friction, dt)
 
-    # GPU 우선 시도 → 실패 시 CPU 폴백
-    platform_attempts = [
-        ("CUDA", {"Precision": "mixed"}),
-        ("OpenCL", {"Precision": "mixed"}),
-        ("CPU", {}),
-    ]
+    # platform에 따라 properties 설정(가능하면)
+    properties = {}
+    try:
+        if platform.getName() == "CUDA":
+            properties = {"Precision": "mixed"}
+    except Exception:
+        properties = {}
 
-    sim = None
-    last_platform_err = None
-    for pname, props in platform_attempts:
-        try:
-            platform = openmm.Platform.getPlatformByName(pname)
-        except Exception:
-            continue
+    def _make_sim(plat, props):
+        return app.Simulation(modeller.topology, system, integrator, plat, props)
 
-        try:
-            print(f"[OpenMM] Platform 시도: {pname}")
-            sim = app.Simulation(modeller.topology, system, integrator, platform, props if props else None)
-            sim.context.setPositions(positions)
-            last_platform_err = None
-            break
-        except Exception as e:
-            last_platform_err = e
-            sim = None
-            print(f"[WARN] Platform {pname} 실패 → 다음 플랫폼으로: {e}")
+    try:
+        simulation = _make_sim(platform, properties)
+    except Exception as e:
+        print(f"[WARN] GPU/OpenCL 플랫폼 초기화 실패 → CPU로 폴백: {e}")
+        platform = _get_openmm_platform(prefer_gpu=False)
+        if platform is None:
+            raise
+        simulation = _make_sim(platform, {})
 
-    if sim is None:
-        raise RuntimeError(f"OpenMM Simulation 생성 실패: {last_platform_err}")
+    simulation.context.setPositions(positions)
 
-    # 1) 에너지 minimization
+    # 6) 에너지 minimization
     print("[OpenMM] 에너지 minimization 수행 (maxIterations=2000)")
-    sim.minimizeEnergy(maxIterations=2000)
+    simulation.minimizeEnergy(maxIterations=2000)
 
-    # 2) 짧은 MD
+    # 7) 짧은 MD
     n_steps = int(md_time_ps * 1000.0 / timestep_fs)  # ps → fs → step
     print(f"[OpenMM] short MD 수행: {md_time_ps} ps, timestep={timestep_fs} fs, steps={n_steps}")
-    sim.context.setVelocitiesToTemperature(temperature)
-    sim.step(n_steps)
+    simulation.context.setVelocitiesToTemperature(temperature)
+    simulation.step(n_steps)
 
-    state = sim.context.getState(getPositions=True)
+    state = simulation.context.getState(getPositions=True)
     final_positions = state.getPositions()
 
     with open(out_pdb, "w") as f:
         app.PDBFile.writeFile(modeller.topology, final_positions, f)
 
     # 메모리 정리
-    del sim, system, integrator
-    import gc
+    del simulation, system, integrator
     gc.collect()
 
     print(f"[OpenMM] refinement 완료 → {out_pdb}")
@@ -2224,6 +2421,7 @@ def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs):
     if not colabfold_out_dir.exists():
         return iptms
 
+    # 후처리 과정에서 붙을 수 있는 suffix들(필요시 추가)
     refine_suffixes = ("_relax", "_openmm_refined", "_openmm", "_refined")
 
     for pdb in rank1_pdbs:
@@ -2249,10 +2447,9 @@ def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs):
         if not candidates:
             candidates = list(colabfold_out_dir.glob(f"{prefix}*scores*.json"))
 
-        for js in candidates:
+        for js_path in candidates:
             try:
-                with open(js) as f:
-                    data = json.load(f)
+                data = json.loads(js_path.read_text(encoding="utf-8", errors="replace"))
             except Exception:
                 continue
 
@@ -2277,13 +2474,16 @@ def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs):
                 if not rd.exists():
                     continue
                 try:
-                    with open(rd) as f:
-                        data = json.load(f)
+                    data = json.loads(rd.read_text(encoding="utf-8", errors="replace"))
                 except Exception:
                     continue
 
                 if isinstance(data, dict):
-                    v = data.get("iptm") or data.get("iptm+ptm")
+                    v = data.get("iptm")
+                    if isinstance(v, (int, float)):
+                        found_val = float(v)
+                        break
+                    v = data.get("iptm+ptm")
                     if isinstance(v, (int, float)):
                         found_val = float(v)
                         break
@@ -2295,7 +2495,6 @@ def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs):
 
     print(f"[INFO] ipTM 값을 읽어온 구조 수: {len(iptms)} / {len(rank1_pdbs)}")
     return iptms
-
 
 def load_plip_scores(plip_dir: Path):
     """
