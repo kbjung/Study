@@ -106,7 +106,7 @@ OBABEL_CMD = shutil.which("obabel") or "obabel"
 COLABFOLD_MAX_MSA = os.environ.get("COLABFOLD_MAX_MSA", "32:128")
 
 # 진행률이 일정 시간 이상 변화 없으면 강제 종료 (메모리 부족/프리징 방지용)
-COLABFOLD_MAX_IDLE_MIN = int(os.environ.get("COLABFOLD_MAX_IDLE_MIN", "10"))   # 예: 30분
+COLABFOLD_MAX_IDLE_MIN = int(os.environ.get("COLABFOLD_MAX_IDLE_MIN", "60"))   # 예: 30분
 
 # 전체 ColabFold 실행 시간 상한 (분)
 COLABFOLD_MAX_TOTAL_MIN = int(os.environ.get("COLABFOLD_MAX_TOTAL_MIN", "1440"))  # 예: 360(6시간)
@@ -799,6 +799,7 @@ def run_colabfold_batch_with_progress(
         start_time = time.time()
         last_done = -1
         last_progress_time = start_time
+        last_log_size = log_file.stat().st_size if log_file.exists() else 0
 
         # 진행 상황 모니터링 루프
         while True:
@@ -817,6 +818,16 @@ def run_colabfold_batch_with_progress(
                 last_progress_time = time.time()
 
             now = time.time()
+            # colabfold_batch는 원격 MSA 서버 대기(PENDING) 중에도 로그를 계속 씁니다.
+            # 완료 파일 수(done)가 늘지 않더라도 로그가 갱신되면 '활동'으로 간주하여 idle 타이머를 리셋합니다.
+            try:
+                cur_size = log_file.stat().st_size
+                if cur_size != last_log_size:
+                    last_log_size = cur_size
+                    last_progress_time = now
+            except Exception:
+                pass
+
 
             # ───────────────────────────────────────────────
             # 0) MSA 서버 타임아웃 로그가 찍혔는지 즉시 확인
@@ -859,7 +870,7 @@ def run_colabfold_batch_with_progress(
             if (now - last_progress_time) > max_idle_min * 60:
                 print(
                     f"\n[ERROR] ColabFold({device_label})가 {max_idle_min}분 동안 "
-                    "진행률이 변하지 않아 강제 중단합니다 (메모리 부족 또는 내부 오류 가능성)."
+                    "진행률/로그 갱신이 없어 강제 중단합니다 (메모리 부족 또는 내부 오류 가능성)."
                 )
                 proc.terminate()
                 try:
@@ -867,11 +878,17 @@ def run_colabfold_batch_with_progress(
                 except subprocess.TimeoutExpired:
                     proc.kill()
 
-                # idle timeout 시에도 참고용으로 로그 위치를 찍어준다.
+                # idle timeout 시에도 참고용으로 로그 위치 + 마지막 로그(tail)를 찍어준다.
                 print(f"[INFO] 강제 종료 후 ColabFold 로그를 확인하세요: {log_file}")
+                tail = ""
+                try:
+                    tail = "\n".join(log_file.read_text(encoding="utf-8", errors="ignore").splitlines()[-120:])
+                except Exception:
+                    pass
                 raise RuntimeError(
-                    f"ColabFold({device_label}) 강제 종료 (idle timeout {max_idle_min}분 초과). "
-                    f"로그: {log_file}"
+                    f"ColabFold({device_label}) 강제 종료 (idle timeout {max_idle_min}분 초과).\n"
+                    f"로그: {log_file}\n"
+                    f"--- tail({log_file.name}) ---\n{tail}\n--- end tail ---"
                 )
 
             # 2) 전체 실행 시간 상한 초과 시 강제 종료
