@@ -121,7 +121,7 @@ if COLABFOLD_PARAM_MODE not in ("auto", "manual"):
     COLABFOLD_PARAM_MODE = "auto"
 
 # (manual) 직접 지정해서 쓰는 값들
-COLABFOLD_MAX_MSA_MANUAL = os.environ.get("COLABFOLD_MAX_MSA", "32:128")
+COLABFOLD_MAX_MSA_MANUAL = os.environ.get("COLABFOLD_MAX_MSA", "64:128")
 COLABFOLD_NUM_RECYCLE_MANUAL = int(os.environ.get("COLABFOLD_NUM_RECYCLE", "3"))
 COLABFOLD_NUM_MODELS_MANUAL  = int(os.environ.get("COLABFOLD_NUM_MODELS", "3"))
 COLABFOLD_NUM_SEEDS_MANUAL   = int(os.environ.get("COLABFOLD_NUM_SEEDS", "1"))
