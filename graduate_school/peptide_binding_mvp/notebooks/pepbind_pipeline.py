@@ -129,6 +129,17 @@ COLABFOLD_CPU_FALLBACK = os.environ.get("COLABFOLD_CPU_FALLBACK", "1").lower() n
 )
 
 # PepMLM 하이퍼파라미터 설정
+'''top_k:
+      - 각 MASK 위치에서 확률 상위 k개 아미노산만 남기고 샘플링.
+      - k 작게 → 모델이 가장 그럴듯하다고 보는 아미노산 위주 (보수적).
+      - k 크게 → 다양한 후보 (탐색적).
+
+    temperature:
+      - logits / temperature 후 softmax.
+      - 1.0   → 원래 분포.
+      - < 1.0 → 분포가 날카로워져서 고확률 토큰 위주 (덜 랜덤).
+      - > 1.0 → 분포가 평탄해져서 저확률 토큰도 선택 (더 랜덤).
+'''
 PEPMLM_TOP_K = 10 # 예. 후보군 Top10 : 10
 PEPMLM_TEMPERATURE = 1.0 # default 1.0
 
