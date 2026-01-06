@@ -92,7 +92,7 @@ TARGET_SEQUENCE = (
 # )
 
 # 2) 생성할 펩타이드 설정
-NUM_PEPTIDES   = 200   # 생성할 펩타이드 후보 개수
+NUM_PEPTIDES   = 10   # 생성할 펩타이드 후보 개수
 PEPTIDE_LENGTH = 4    # 각 펩타이드 길이 (아미노산 개수)
 
 # 3) ColabFold / 평가 단계 사용 여부
