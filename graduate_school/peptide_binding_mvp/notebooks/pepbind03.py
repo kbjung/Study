@@ -94,7 +94,7 @@ TARGET_SEQUENCE = (
 # 2) 생성할 펩타이드 설정(PepMLM)
 #    - NUM_PEPTIDES: 생성할 후보 개수
 #    - PEPTIDE_LENGTH: 각 후보의 펩타이드 길이(아미노산 개수)
-NUM_PEPTIDES   = 10
+NUM_PEPTIDES   = 200
 PEPTIDE_LENGTH = 4
 
 # 3) 파이프라인 단계 실행 여부 (True/False)
