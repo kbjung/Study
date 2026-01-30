@@ -3878,64 +3878,106 @@ def main():
         print(f"  MAX_RETRY_ROUNDS       = {MAX_RETRY_ROUNDS}")
         print(f"  GBSA_FAILURE_THRESHOLD = {GBSA_FAILURE_THRESHOLD}")
         print(f"  RETRY_RANDOM_SEED_OFFSET = {RETRY_RANDOM_SEED_OFFSET}")
+        print(f"  전체 복합체 개수        = {len(peptides)}")
         
-        retry_round = 0
-        while retry_round < MAX_RETRY_ROUNDS:
-            print(f"\n[STEP 8-{retry_round+1}] 실패 복합체 탐지 중...")
+        # 초기 실패 복합체 탐지
+        print(f"\n[초기 탐지] 실패 복합체 확인 중...")
+        initial_failed = identify_failed_complexes(
+            peptides,
+            rank1_pdbs,
+            folders["results"],
+            threshold=GBSA_FAILURE_THRESHOLD,
+        )
+        
+        if not initial_failed:
+            print("✅ 모든 복합체가 정상 범위 내 → 재시도 불필요")
+            step8_end = datetime.now()
+            print_step_timing("STEP 8: 실패 복합체 재시도 (불필요)", step8_start, step8_end)
+        else:
+            print(f"❌ 실패 복합체 {len(initial_failed)}개 발견 (전체 {len(peptides)}개 중)")
             
-            # 8-1: 실패 복합체 식별
-            failed = identify_failed_complexes(
+            retry_round = 0
+            while retry_round < MAX_RETRY_ROUNDS:
+                retry_round += 1
+                
+                print(f"\n{'='*60}")
+                print(f"[재시도 {retry_round}/{MAX_RETRY_ROUNDS}] 시작")
+                print(f"{'='*60}")
+                
+                # 현재 실패 복합체 재확인
+                failed = identify_failed_complexes(
+                    peptides,
+                    rank1_pdbs,
+                    folders["results"],
+                    threshold=GBSA_FAILURE_THRESHOLD,
+                )
+                
+                if not failed:
+                    print(f"✅ 모든 복합체 정상화 완료!")
+                    print(f"   - 초기 실패: {len(initial_failed)}개")
+                    print(f"   - 현재 실패: 0개")
+                    print(f"   - 성공적으로 복구된 복합체: {len(initial_failed)}개")
+                    break
+                
+                print(f"📊 현재 상태:")
+                print(f"   - 초기 실패 복합체: {len(initial_failed)}개")
+                print(f"   - 현재 실패 복합체: {len(failed)}개")
+                print(f"   - 복구된 복합체: {len(initial_failed) - len(failed)}개")
+                print(f"\n재시도 대상 {len(failed)}개:")
+                for idx, pep, reason in failed:
+                    print(f"  - complex_{idx} ({pep}): {reason}")
+                
+                # 8-2: ColabFold 재실행 (다른 seed)
+                retry_output_dir = folders["colabfold_out"] / f"retry_{retry_round}"
+                retry_output_dir.mkdir(parents=True, exist_ok=True)
+                
+                peptides_to_retry = [pep for _, pep, _ in failed]
+                original_indices = [idx for idx, _, _ in failed]
+                
+                retry_pdbs = run_colabfold_for_subset(
+                    peptides_to_retry,
+                    original_indices,
+                    target_seq,
+                    retry_output_dir,
+                    folders["temp"],
+                    random_seed=RETRY_RANDOM_SEED_OFFSET * retry_round,
+                )
+                
+                if not retry_pdbs:
+                    print(f"[WARN] ColabFold 재시도 결과 없음")
+                    continue
+                
+                # 8-3: OpenMM + Vina + PLIP + PRODIGY
+                retry_results = process_retry_complexes_pipeline(
+                    retry_pdbs,
+                    folders,
+                    target_seq,
+                    peptides,
+                    retry_round,
+                )
+                
+                # 8-4: 결과 병합 (개선된 결과만 업데이트)
+                rank1_pdbs = merge_retry_results(rank1_pdbs, retry_results)
+                
+                print(f"\n[재시도 {retry_round}] 완료 - 결과 병합됨")
+            
+            # 최종 요약
+            print(f"\n{'='*60}")
+            print(f"STEP 8 최종 요약")
+            print(f"{'='*60}")
+            final_failed = identify_failed_complexes(
                 peptides,
                 rank1_pdbs,
                 folders["results"],
                 threshold=GBSA_FAILURE_THRESHOLD,
             )
+            print(f"  초기 실패 복합체: {len(initial_failed)}개")
+            print(f"  최종 실패 복합체: {len(final_failed)}개")
+            print(f"  복구 성공: {len(initial_failed) - len(final_failed)}개")
+            print(f"  재시도 횟수: {retry_round}회")
             
-            if not failed:
-                print("✅ 모든 복합체가 정상 범위 내 결과 → 재시도 불필요")
-                break
-            
-            retry_round += 1
-            print(f"\n[RETRY {retry_round}/{MAX_RETRY_ROUNDS}] {len(failed)}개 복합체 재시도")
-            for idx, pep, reason in failed:
-                print(f"  - complex_{idx} ({pep}): {reason}")
-            
-            # 8-2: ColabFold 재실행 (다른 seed)
-            retry_output_dir = folders["colabfold_out"] / f"retry_{retry_round}"
-            retry_output_dir.mkdir(parents=True, exist_ok=True)
-            
-            peptides_to_retry = [pep for _, pep, _ in failed]
-            original_indices = [idx for idx, _, _ in failed]
-            
-            retry_pdbs = run_colabfold_for_subset(
-                peptides_to_retry,
-                original_indices,
-                target_seq,
-                retry_output_dir,
-                folders["temp"],
-                random_seed=RETRY_RANDOM_SEED_OFFSET * retry_round,
-            )
-            
-            if not retry_pdbs:
-                print("[WARN] ColabFold 재시도 결과 없음, 다음 라운드 진행")
-                continue
-            
-            # 8-3: OpenMM + Vina + PLIP + PRODIGY
-            retry_results = process_retry_complexes_pipeline(
-                retry_pdbs,
-                folders,
-                target_seq,
-                peptides,
-                retry_round,
-            )
-            
-            # 8-4: 결과 병합 (개선된 결과만 업데이트)
-            rank1_pdbs = merge_retry_results(rank1_pdbs, retry_results)
-            
-            print(f"[RETRY {retry_round}] 완료 - 결과 병합됨")
-        
-        step8_end = datetime.now()
-        print_step_timing(f"STEP 8: 실패 복합체 재시도 ({retry_round}회)", step8_start, step8_end)
+            step8_end = datetime.now()
+            print_step_timing(f"STEP 8: 실패 복합체 재시도 ({retry_round}회)", step8_start, step8_end)
     else:
         now = datetime.now()
         if not RUN_RETRY:
