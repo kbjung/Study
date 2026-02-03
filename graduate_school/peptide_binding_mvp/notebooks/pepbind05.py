@@ -93,8 +93,8 @@ TARGET_SEQUENCE = (
 # 2) 생성할 펩타이드 설정(PepMLM)
 #    - NUM_PEPTIDES: 생성할 후보 개수
 #    - PEPTIDE_LENGTH: 각 후보의 펩타이드 길이(아미노산 개수)
-NUM_PEPTIDES   = 50
-PEPTIDE_LENGTH = 4
+NUM_PEPTIDES   = 200
+PEPTIDE_LENGTH = 18
 
 # 3) 파이프라인 단계 실행 여부 (True/False)
 #    - 각 단계별로 실행/스킵을 쉽게 제어하기 위한 스위치
@@ -218,6 +218,7 @@ RANK_TABLE_HEADERS = [
     "rank",
     "candidate_id",
     "peptide_seq",
+    "complex_pdb",  # 추가됨
     "AlphaFold_status",
     "FinalScore",
     "PRODIGY_status",
@@ -234,9 +235,9 @@ RANK_TABLE_HEADERS = [
 ]
 
 ALL_METRICS_HEADERS = [
+    "rank",  # 맨 앞으로 이동
     "candidate_id",
     "peptide_seq",
-    "rank",
     "complex_pdb",
     "AlphaFold_status",
     "FinalScore",
@@ -2295,15 +2296,33 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
         row_data["vina_score"] = best_score
         summary_rows.append(row_data)
 
-    # 요약 엑셀 저장 (첫 행은 헤더)
+    # 요약 엑셀 저장 (기존 파일이 있으면 병합하여 업데이트)
     try:
         if summary_rows:
-            df_vina = pd.DataFrame(summary_rows)
-            # 컬럼 순서를 상수로 강제
-            df_vina = df_vina[VINA_SUMMARY_COLS]
+            df_new = pd.DataFrame(summary_rows)
+            df_new = df_new[VINA_SUMMARY_COLS]
             xlsx_path = vina_dir / "vina_summary.xlsx"
-            df_vina.to_excel(xlsx_path, index=False)
-            print(f"\n✅ Vina 요약 엑셀 저장: {xlsx_path}")
+            
+            # 기존 파일이 있으면 병합
+            if xlsx_path.exists():
+                try:
+                    df_existing = pd.read_excel(xlsx_path)
+                    # 새 데이터의 complex 목록
+                    new_complexes = set(df_new["complex"].tolist())
+                    # 기존 데이터에서 새 complex와 겹치지 않는 행만 유지
+                    df_existing = df_existing[~df_existing["complex"].isin(new_complexes)]
+                    # 병합
+                    df_merged = pd.concat([df_existing, df_new], ignore_index=True)
+                    df_merged = df_merged[VINA_SUMMARY_COLS]
+                    df_merged.to_excel(xlsx_path, index=False)
+                    print(f"\n✅ Vina 요약 엑셀 업데이트 (병합): {xlsx_path} (총 {len(df_merged)}개)")
+                except Exception as e:
+                    # 병합 실패 시 새 데이터만 저장
+                    df_new.to_excel(xlsx_path, index=False)
+                    print(f"\n✅ Vina 요약 엑셀 저장 (새로 생성): {xlsx_path}")
+            else:
+                df_new.to_excel(xlsx_path, index=False)
+                print(f"\n✅ Vina 요약 엑셀 저장: {xlsx_path}")
         else:
             print("[INFO] Vina 요약에 기록할 데이터가 없습니다.")
     except Exception as e:
@@ -2496,14 +2515,29 @@ def run_prodigy_on_rank1(rank1_pdbs, out_dir: Path) -> pd.DataFrame:
         debug_file.write_text("\n".join(debug_lines), encoding="utf-8")
         print(f"[INFO] PRODIGY 디버그 로그: {debug_file}")
 
-    df = pd.DataFrame(records)
+    df_new = pd.DataFrame(records)
 
     xlsx_path = out_dir / "prodigy_summary.xlsx"
     try:
-        if not df.empty:
-            df = df[PRODIGY_SUMMARY_COLS]
-            df.to_excel(xlsx_path, index=False)
-            print(f"✅ PRODIGY 요약 엑셀 저장: {xlsx_path}")
+        if not df_new.empty:
+            df_new = df_new[PRODIGY_SUMMARY_COLS]
+            
+            # 기존 파일이 있으면 병합
+            if xlsx_path.exists():
+                try:
+                    df_existing = pd.read_excel(xlsx_path)
+                    new_complexes = set(df_new["complex"].tolist())
+                    df_existing = df_existing[~df_existing["complex"].isin(new_complexes)]
+                    df_merged = pd.concat([df_existing, df_new], ignore_index=True)
+                    df_merged = df_merged[PRODIGY_SUMMARY_COLS]
+                    df_merged.to_excel(xlsx_path, index=False)
+                    print(f"✅ PRODIGY 요약 엑셀 업데이트 (병합): {xlsx_path} (총 {len(df_merged)}개)")
+                except Exception:
+                    df_new.to_excel(xlsx_path, index=False)
+                    print(f"✅ PRODIGY 요약 엑셀 저장: {xlsx_path}")
+            else:
+                df_new.to_excel(xlsx_path, index=False)
+                print(f"✅ PRODIGY 요약 엑셀 저장: {xlsx_path}")
         else:
             print("[INFO] PRODIGY 요약에 기록할 데이터가 없습니다.")
     except Exception as e:
@@ -2523,7 +2557,7 @@ def run_prodigy_on_rank1(rank1_pdbs, out_dir: Path) -> pd.DataFrame:
         print(f"[WARN] PRODIGY 요약 엑셀 number_format 설정 실패: {e}")
 
 
-    return df
+    return df_new
 
 
 # =====================================================================
@@ -2699,7 +2733,7 @@ def load_prodigy_scores(prodigy_dir: Path):
     return scores, statuses
 
 
-def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs):
+def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs, pdb_base_dir: Path = None):
     """
     ColabFold 출력 폴더에서 ipTM 값을 최대한 유연하게 찾는다.
 
@@ -2713,9 +2747,22 @@ def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs):
         예) ..._openmm_refined.pdb, ..._relax.pdb, ..._openmm_refined_relax.pdb
       → 원본 stem을 추정(orig_stem)해서 json을 찾고,
         iptms[orig_stem] 과 iptms[base] 둘 다에 같은 값을 기록한다.
+    
+    - 재시도 폴더(colabfold_retry_*)도 검색하여 최신 ipTM 값을 사용
     """
     iptms = {}
-    if not colabfold_out_dir.exists():
+    
+    # 검색할 디렉토리 목록 생성 (메인 + 재시도 폴더들)
+    search_dirs = []
+    if colabfold_out_dir.exists():
+        search_dirs.append(colabfold_out_dir)
+    
+    # 재시도 폴더들도 검색 (pdb_base_dir이 제공된 경우)
+    if pdb_base_dir and pdb_base_dir.exists():
+        retry_dirs = sorted(pdb_base_dir.glob("colabfold_retry_*"))
+        search_dirs.extend(retry_dirs)
+    
+    if not search_dirs:
         return iptms
 
     # 후처리 과정에서 붙을 수 있는 suffix들(필요시 추가)
@@ -2739,39 +2786,16 @@ def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs):
 
         found_val = None
 
-        # 1) scores*.json 후보들 (원본 stem 기준)
-        candidates = list(colabfold_out_dir.glob(f"{orig_stem}*scores*.json"))
-        if not candidates:
-            candidates = list(colabfold_out_dir.glob(f"{prefix}*scores*.json"))
+        # 모든 검색 디렉토리에서 찾기 (나중 폴더가 우선 = 재시도 결과 우선)
+        for search_dir in search_dirs:
+            # 1) scores*.json 후보들 (원본 stem 기준)
+            candidates = list(search_dir.glob(f"{orig_stem}*scores*.json"))
+            if not candidates:
+                candidates = list(search_dir.glob(f"{prefix}*scores*.json"))
 
-        for js_path in candidates:
-            try:
-                data = json.loads(js_path.read_text(encoding="utf-8", errors="replace"))
-            except Exception:
-                continue
-
-            if isinstance(data, dict):
-                v = data.get("iptm")
-                if isinstance(v, (int, float)):
-                    found_val = float(v)
-                    break
-                v = data.get("iptm+ptm")
-                if isinstance(v, (int, float)):
-                    found_val = float(v)
-                    break
-
-        # 2) ranking_debug 후보들
-        if found_val is None:
-            rd_candidates = [
-                colabfold_out_dir / f"{orig_stem}_ranking_debug.json",
-                colabfold_out_dir / f"{prefix}_ranking_debug.json",
-                colabfold_out_dir / "ranking_debug.json",
-            ]
-            for rd in rd_candidates:
-                if not rd.exists():
-                    continue
+            for js_path in candidates:
                 try:
-                    data = json.loads(rd.read_text(encoding="utf-8", errors="replace"))
+                    data = json.loads(js_path.read_text(encoding="utf-8", errors="replace"))
                 except Exception:
                     continue
 
@@ -2784,6 +2808,31 @@ def load_iptm_scores(colabfold_out_dir: Path, rank1_pdbs):
                     if isinstance(v, (int, float)):
                         found_val = float(v)
                         break
+
+            # 2) ranking_debug 후보들
+            if found_val is None:
+                rd_candidates = [
+                    search_dir / f"{orig_stem}_ranking_debug.json",
+                    search_dir / f"{prefix}_ranking_debug.json",
+                    search_dir / "ranking_debug.json",
+                ]
+                for rd in rd_candidates:
+                    if not rd.exists():
+                        continue
+                    try:
+                        data = json.loads(rd.read_text(encoding="utf-8", errors="replace"))
+                    except Exception:
+                        continue
+
+                    if isinstance(data, dict):
+                        v = data.get("iptm")
+                        if isinstance(v, (int, float)):
+                            found_val = float(v)
+                            break
+                        v = data.get("iptm+ptm")
+                        if isinstance(v, (int, float)):
+                            found_val = float(v)
+                            break
 
         if found_val is not None:
             # 원본/후처리 stem 둘 다 키로 저장
@@ -2965,13 +3014,26 @@ def load_plip_scores(plip_dir: Path):
         })
 
     if summary_rows:
-        df = pd.DataFrame(summary_rows)
-        # 컬럼 순서를 상수로 관리
-        df = df[PLIP_SUMMARY_COLS]
+        df_new = pd.DataFrame(summary_rows)
+        df_new = df_new[PLIP_SUMMARY_COLS]
         xlsx_path = plip_dir / "plip_summary.xlsx"
         try:
-            df.to_excel(xlsx_path, index=False)
-            print(f"[INFO] PLIP 요약 엑셀 저장: {xlsx_path}")
+            # 기존 파일이 있으면 병합
+            if xlsx_path.exists():
+                try:
+                    df_existing = pd.read_excel(xlsx_path)
+                    new_complexes = set(df_new["complex"].tolist())
+                    df_existing = df_existing[~df_existing["complex"].isin(new_complexes)]
+                    df_merged = pd.concat([df_existing, df_new], ignore_index=True)
+                    df_merged = df_merged[PLIP_SUMMARY_COLS]
+                    df_merged.to_excel(xlsx_path, index=False)
+                    print(f"[INFO] PLIP 요약 엑셀 업데이트 (병합): {xlsx_path} (총 {len(df_merged)}개)")
+                except Exception:
+                    df_new.to_excel(xlsx_path, index=False)
+                    print(f"[INFO] PLIP 요약 엑셀 저장: {xlsx_path}")
+            else:
+                df_new.to_excel(xlsx_path, index=False)
+                print(f"[INFO] PLIP 요약 엑셀 저장: {xlsx_path}")
         except Exception as e:
             print(f"[WARN] PLIP 요약 엑셀 저장 실패: {e}")
 
@@ -3059,6 +3121,7 @@ def build_and_save_final_table(
     """
     results_dir     = folders["results"]
     colabfold_out   = folders["colabfold_out"]
+    pdb_dir         = folders["pdb"]  # 재시도 폴더 검색용
     vina_dir        = folders["vina"]
     plip_dir        = folders["plip"]
     prodigy_dir     = folders["prodigy"]
@@ -3066,7 +3129,7 @@ def build_and_save_final_table(
     # 각 평가 지표 + 상태 불러오기
     vina_vals, vina_status         = load_vina_scores(vina_dir)
     prodigy_vals, prodigy_status   = load_prodigy_scores(prodigy_dir)
-    iptm_vals                      = load_iptm_scores(colabfold_out, rank1_pdbs)
+    iptm_vals                      = load_iptm_scores(colabfold_out, rank1_pdbs, pdb_dir)  # 재시도 폴더도 검색
     plip_metrics, plip_status      = load_plip_scores(plip_dir)
 
     # PLIP total 값만 따로 dict로 추출
@@ -3214,6 +3277,7 @@ def build_and_save_final_table(
         "rank": lambda r, idx: idx,
         "candidate_id": lambda r, idx: r["candidate_id"],
         "peptide_seq": lambda r, idx: r["peptide_seq"],
+        "complex_pdb": lambda r, idx: r["complex_pdb"],  # 추가됨
         "AlphaFold_status": lambda r, idx: r["alphafold_status"],
         "FinalScore": lambda r, idx: round(r["final_score"], 4) if r["final_score"] is not None else None,
         "PRODIGY_status": lambda r, idx: r["prodigy_status"],
@@ -3432,41 +3496,46 @@ def identify_failed_complexes(
         list of tuples: [(원본_인덱스, 펩타이드_서열, 실패_이유), ...]
     """
     failed = []
+    import pandas as pd
     
-    # GBSA summary 파일 읽기 (있으면)
-    gbsa_summary_path = results_dir / "gbsa_summary.csv"
+    # GBSA 데이터 수집 (여러 소스에서)
     gbsa_data = {}
+    
+    # 1) 최종 Excel 파일에서 GBSA_bind 읽기 (가장 정확한 소스)
+    xlsx_files = list(results_dir.glob("final_peptide_rank_*.xlsx"))
+    if xlsx_files:
+        latest_xlsx = max(xlsx_files, key=lambda x: x.stat().st_mtime)
+        try:
+            df_excel = pd.read_excel(latest_xlsx, sheet_name="all_metrics")
+            for _, row in df_excel.iterrows():
+                cid = row.get("candidate_id", "")
+                gbsa_bind = row.get("GBSA_bind")
+                if cid and gbsa_bind is not None and not pd.isna(gbsa_bind):
+                    gbsa_data[cid] = float(gbsa_bind)
+            print(f"  [INFO] GBSA 데이터 로드: {latest_xlsx.name} ({len(gbsa_data)}개)")
+        except Exception as e:
+            print(f"  [WARN] Excel에서 GBSA 읽기 실패: {e}")
+    
+    # 2) gbsa_summary.csv 파일에서 보충
+    gbsa_summary_path = results_dir / "gbsa_summary.csv"
     if gbsa_summary_path.exists():
-        import pandas as pd
         try:
             df_gbsa = pd.read_csv(gbsa_summary_path)
             for _, row in df_gbsa.iterrows():
                 complex_name = row.get("complex", "")
                 gbsa_bind = row.get("GBSA_bind")
-                if complex_name and gbsa_bind is not None:
-                    gbsa_data[complex_name] = gbsa_bind
+                if complex_name and gbsa_bind is not None and not pd.isna(gbsa_bind):
+                    if complex_name not in gbsa_data:  # Excel에서 이미 읽은 값 유지
+                        gbsa_data[complex_name] = float(gbsa_bind)
         except Exception as e:
-            print(f"[WARN] GBSA summary 읽기 실패: {e}")
-    
-    # 폴더 내 JSON 결과에서 GBSA 데이터 확인 (summary가 없을 경우)
-    if not gbsa_data:
-        for pdb_path in rank1_pdbs:
-            complex_name = pdb_path.stem.split("_unrelaxed")[0]
-            if "_openmm_refined" in pdb_path.stem:
-                complex_name = pdb_path.stem.split("_openmm_refined")[0].split("_unrelaxed")[0]
-            
-            # GBSA JSON 결과 파일 찾기
-            gbsa_json = results_dir / f"{complex_name}_gbsa.json"
-            if gbsa_json.exists():
-                try:
-                    with open(gbsa_json, "r") as f:
-                        data = json.load(f)
-                        gbsa_data[complex_name] = data.get("GBSA_bind")
-                except Exception:
-                    pass
+            print(f"  [WARN] gbsa_summary.csv 읽기 실패: {e}")
     
     # 각 복합체 검사
-    for i, (pdb_path, peptide) in enumerate(zip(rank1_pdbs, peptides)):
+    for i, peptide in enumerate(peptides):
+        if i >= len(rank1_pdbs):
+            continue
+            
+        pdb_path = rank1_pdbs[i]
         complex_name = f"complex_{i}"
         fail_reason = None
         
@@ -3475,12 +3544,15 @@ def identify_failed_complexes(
         if "_openmm_refined" not in pdb_str:
             fail_reason = "OpenMM 정제 실패 (원본 ColabFold PDB 사용)"
         
-        # 2) GBSA 값 확인
-        if not fail_reason and complex_name in gbsa_data:
+        # 2) GBSA 값 확인 (OpenMM 성공해도 GBSA가 높으면 실패)
+        if complex_name in gbsa_data:
             gbsa_val = gbsa_data[complex_name]
             if gbsa_val is not None and isinstance(gbsa_val, (int, float)):
                 if gbsa_val > threshold:
-                    fail_reason = f"GBSA > {threshold} (실제: {gbsa_val:.2f})"
+                    if fail_reason:
+                        fail_reason += f" + GBSA > {threshold} ({gbsa_val:.2f})"
+                    else:
+                        fail_reason = f"GBSA > {threshold} (실제: {gbsa_val:.2f})"
         
         # 3) 원자 충돌 확인 (간단한 체크)
         if not fail_reason:
@@ -3621,15 +3693,17 @@ def run_colabfold_for_subset(
 def process_retry_complexes_pipeline(
     retry_pdbs: list,
     folders: dict,
-    target_seq: str,
-    peptides: list,
-    retry_round: int,
 ) -> dict:
     """
-    재시도 복합체들에 대해 OpenMM 정제 → Vina → PLIP → PRODIGY 파이프라인 실행.
+    재시도 복합체들에 대해 OpenMM 정제 → GBSA → Vina → PLIP → PRODIGY 파이프라인 실행.
+    모든 결과는 메인 디렉토리에 저장하여 최종 결과 테이블에 반영되도록 함.
+    
+    Args:
+        retry_pdbs: [(원본_인덱스, pdb_path), ...] 형태의 리스트
+        folders: 워크스페이스 폴더 딕셔너리
     
     Returns:
-        dict: {원본_인덱스: {refined_pdb, vina_score, plip_result, prodigy_dg, gbsa_bind}}
+        dict: {원본_인덱스: {refined_pdb, openmm_ok, gbsa_bind}}
     """
     results = {}
     
@@ -3642,6 +3716,7 @@ def process_retry_complexes_pipeline(
             "pdb_path": pdb_path,
             "refined_pdb": None,
             "openmm_ok": False,
+            "gbsa_bind": None,
         }
         
         # 1) OpenMM 정제
@@ -3658,6 +3733,15 @@ def process_retry_complexes_pipeline(
                 result["refined_pdb"] = out_pdb
                 result["openmm_ok"] = True
                 print(f"  [RETRY] {complex_name} OpenMM 정제 성공")
+                
+                # 2) GBSA 계산 (정제 성공 시)
+                try:
+                    gbsa_result = compute_openmm_gbsa_binding_energy(out_pdb)
+                    if gbsa_result and "GBSA_bind" in gbsa_result:
+                        result["gbsa_bind"] = gbsa_result["GBSA_bind"]
+                        print(f"  [RETRY] {complex_name} GBSA = {result['gbsa_bind']:.2f} kcal/mol")
+                except Exception as e:
+                    print(f"  [RETRY] {complex_name} GBSA 계산 오류: {e}")
             else:
                 result["refined_pdb"] = pdb_path
                 print(f"  [RETRY] {complex_name} OpenMM 정제 실패, 원본 사용")
@@ -3667,28 +3751,28 @@ def process_retry_complexes_pipeline(
         
         results[orig_idx] = result
     
-    # 2) Vina, PLIP, PRODIGY는 기존 함수 재활용
+    # 3) Vina, PLIP, PRODIGY - 메인 디렉토리에 저장 (최종 결과 테이블에 반영되도록)
     retry_refined_pdbs = []
     retry_indices = []
     for orig_idx, res in results.items():
-        if res["refined_pdb"]:
+        if res["refined_pdb"] and res["openmm_ok"]:
             retry_refined_pdbs.append(res["refined_pdb"])
             retry_indices.append(orig_idx)
     
-    if RUN_VINA and retry_refined_pdbs:
-        vina_retry_dir = folders["vina"] / f"retry_{retry_round}"
-        vina_retry_dir.mkdir(parents=True, exist_ok=True)
-        run_vina_on_rank1(retry_refined_pdbs, vina_retry_dir)
-    
-    if RUN_PLIP and retry_refined_pdbs:
-        plip_retry_dir = folders["plip"] / f"retry_{retry_round}"
-        plip_retry_dir.mkdir(parents=True, exist_ok=True)
-        run_plip_on_rank1(retry_refined_pdbs, plip_retry_dir)
-    
-    if RUN_PRODIGY and retry_refined_pdbs:
-        prodigy_retry_dir = folders["prodigy"] / f"retry_{retry_round}"
-        prodigy_retry_dir.mkdir(parents=True, exist_ok=True)
-        run_prodigy_on_rank1(retry_refined_pdbs, prodigy_retry_dir)
+    if retry_refined_pdbs:
+        print(f"\n  [RETRY] {len(retry_refined_pdbs)}개 복합체에 대해 Vina/PLIP/PRODIGY 실행...")
+        
+        if RUN_VINA:
+            # 메인 vina 디렉토리에 저장
+            run_vina_on_rank1(retry_refined_pdbs, folders["vina"])
+        
+        if RUN_PLIP:
+            # 메인 plip 디렉토리에 저장
+            run_plip_on_rank1(retry_refined_pdbs, folders["plip"])
+        
+        if RUN_PRODIGY:
+            # 메인 prodigy 디렉토리에 저장
+            run_prodigy_on_rank1(retry_refined_pdbs, folders["prodigy"])
     
     return results
 
@@ -3696,28 +3780,42 @@ def process_retry_complexes_pipeline(
 def merge_retry_results(
     rank1_pdbs: list,
     retry_results: dict,
+    gbsa_threshold: float = GBSA_FAILURE_THRESHOLD,
 ) -> list:
     """
     재시도 결과로 rank1_pdbs 리스트 업데이트.
-    개선된 결과(refined PDB)만 교체.
+    GBSA가 threshold 이하로 개선된 결과만 교체.
     
     Args:
         rank1_pdbs: 기존 PDB 경로 리스트
-        retry_results: {원본_인덱스: {refined_pdb, ...}}
+        retry_results: {원본_인덱스: {refined_pdb, openmm_ok, gbsa_bind}}
+        gbsa_threshold: GBSA 임계값
     
     Returns:
         list: 업데이트된 PDB 경로 리스트
     """
     updated_pdbs = list(rank1_pdbs)
+    merged_count = 0
+    skipped_high_gbsa = 0
     
     for orig_idx, res in retry_results.items():
         if res.get("openmm_ok") and res.get("refined_pdb"):
             if 0 <= orig_idx < len(updated_pdbs):
-                old_pdb = updated_pdbs[orig_idx]
-                new_pdb = res["refined_pdb"]
-                updated_pdbs[orig_idx] = new_pdb
-                print(f"  [MERGE] complex_{orig_idx}: {old_pdb.name} → {new_pdb.name}")
+                gbsa_bind = res.get("gbsa_bind")
+                
+                # GBSA 값이 여전히 높으면 병합하지 않음 (다음 재시도에서 계속 처리)
+                if gbsa_bind is not None and gbsa_bind > gbsa_threshold:
+                    print(f"  [SKIP] complex_{orig_idx}: GBSA={gbsa_bind:.2f} > {gbsa_threshold} (여전히 높음, 다음 재시도에서 처리)")
+                    skipped_high_gbsa += 1
+                else:
+                    old_pdb = updated_pdbs[orig_idx]
+                    new_pdb = res["refined_pdb"]
+                    updated_pdbs[orig_idx] = new_pdb
+                    gbsa_str = f" (GBSA={gbsa_bind:.2f})" if gbsa_bind is not None else ""
+                    print(f"  [MERGE] complex_{orig_idx}: {old_pdb.name} → {new_pdb.name}{gbsa_str}")
+                    merged_count += 1
     
+    print(f"  [MERGE 요약] 병합: {merged_count}개, GBSA 높음 스킵: {skipped_high_gbsa}개")
     return updated_pdbs
 
 
@@ -3928,7 +4026,7 @@ def main():
                     print(f"  - complex_{idx} ({pep}): {reason}")
                 
                 # 8-2: ColabFold 재실행 (다른 seed)
-                retry_output_dir = folders["colabfold_out"] / f"retry_{retry_round}"
+                retry_output_dir = folders["pdb"] / f"colabfold_retry_{retry_round}"
                 retry_output_dir.mkdir(parents=True, exist_ok=True)
                 
                 peptides_to_retry = [pep for _, pep, _ in failed]
@@ -3951,9 +4049,6 @@ def main():
                 retry_results = process_retry_complexes_pipeline(
                     retry_pdbs,
                     folders,
-                    target_seq,
-                    peptides,
-                    retry_round,
                 )
                 
                 # 8-4: 결과 병합 (개선된 결과만 업데이트)
