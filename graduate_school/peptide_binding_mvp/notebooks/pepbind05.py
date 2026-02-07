@@ -10,9 +10,8 @@ pepbind05.py - 실패 복합체 자동 재시도 기능 추가 버전
 - STEP 4: AutoDock Vina 도킹 (CPU, stdout 파싱)
 - STEP 5: PLIP 상호작용 분석
 - STEP 6: PRODIGY 결합 자유에너지 평가
-- STEP 7: rank_001 PDB zip 압축
-- STEP 8: 실패 복합체 자동 재시도 (GBSA>100 또는 OpenMM 실패 시 ColabFold부터 재실행) ★ NEW
-- STEP 9: 최종 엑셀 파일 생성 (재시도 결과 포함)
+- STEP 7: 실패 복합체 자동 재시도 (GBSA>100 또는 OpenMM 실패 시 ColabFold부터 재실행) ★ NEW
+- STEP 8: 최종 엑셀 파일 및 PDB zip 생성 (재시도 결과 포함)
 
 실패 복합체 재시도 기능:
   - GBSA > 100 kcal/mol 또는 OpenMM 정제 실패 시 ColabFold부터 재실행
@@ -93,8 +92,8 @@ TARGET_SEQUENCE = (
 # 2) 생성할 펩타이드 설정(PepMLM)
 #    - NUM_PEPTIDES: 생성할 후보 개수
 #    - PEPTIDE_LENGTH: 각 후보의 펩타이드 길이(아미노산 개수)
-NUM_PEPTIDES   = 200
-PEPTIDE_LENGTH = 18
+NUM_PEPTIDES   = 50
+PEPTIDE_LENGTH = 4
 
 # 3) 파이프라인 단계 실행 여부 (True/False)
 #    - 각 단계별로 실행/스킵을 쉽게 제어하기 위한 스위치
@@ -259,9 +258,9 @@ ALL_METRICS_HEADERS = [
 ]
 
 NORM_DEBUG_HEADERS = [
+    "rank",  # 맨 앞으로 이동
     "candidate_id",
     "peptide_seq",
-    "rank",
     "norm_ipTM",
     "norm_PRODIGY_dG",
     "norm_Vina_score",
@@ -278,6 +277,180 @@ NORM_DEBUG_HEADERS = [
     "GBSA_bind",
 ]
 
+# =====================================================================
+# === 결과 캐시 구조 (Option 3: 캐시 기반 재시도 로직) ==================
+# =====================================================================
+# results_cache: 각 복합체별 모든 평가 결과 저장
+# - 초기 파이프라인 실행 시 저장
+# - 재시도 시 개선된 경우만 업데이트
+# - 최종 Excel 생성 시 이 데이터 사용
+
+RESULTS_CACHE = {}  # 전역 결과 캐시 (main()에서 초기화)
+
+def init_results_cache(peptides: list) -> dict:
+    """
+    결과 캐시 초기화.
+    각 복합체에 대해 빈 구조 생성.
+    """
+    cache = {}
+    for i, peptide in enumerate(peptides):
+        complex_id = f"complex_{i}"
+        cache[complex_id] = {
+            "index": i,
+            "peptide": peptide,
+            "pdb_path": None,
+            "openmm_ok": False,
+            "gbsa": None,
+            "gbsa_status": None,
+            "gbsa_e_complex": None,
+            "gbsa_e_receptor": None,
+            "gbsa_e_peptide": None,
+            "vina_score": None,
+            "vina_status": None,
+            "plip_total": None,
+            "plip_hbond": None,
+            "plip_hydrophobic": None,
+            "plip_saltbridge": None,
+            "plip_status": None,
+            "prodigy_dg": None,
+            "prodigy_status": None,
+            "iptm": None,
+            "alphafold_status": None,
+            "retry_round": 0,  # 0 = 초기 실행, 1,2,3 = 재시도 라운드
+        }
+    return cache
+
+
+def update_cache_from_openmm(cache: dict, complex_id: str, pdb_path, openmm_ok: bool, gbsa_result: dict):
+    """
+    OpenMM 정제 및 GBSA 계산 결과를 캐시에 업데이트.
+    """
+    if complex_id not in cache:
+        return
+    
+    from pathlib import Path
+    cache[complex_id]["pdb_path"] = Path(pdb_path) if pdb_path else None
+    cache[complex_id]["openmm_ok"] = openmm_ok
+    
+    if gbsa_result:
+        cache[complex_id]["gbsa"] = gbsa_result.get("GBSA_bind")
+        cache[complex_id]["gbsa_status"] = gbsa_result.get("status")
+        cache[complex_id]["gbsa_e_complex"] = gbsa_result.get("E_complex")
+        cache[complex_id]["gbsa_e_receptor"] = gbsa_result.get("E_receptor")
+        cache[complex_id]["gbsa_e_peptide"] = gbsa_result.get("E_peptide")
+
+
+def update_cache_from_vina(cache: dict, vina_scores: dict, vina_statuses: dict):
+    """
+    Vina 점수를 캐시에 업데이트.
+    vina_scores/statuses 키는 PDB 파일명 기준 (complex_X_... 또는 complex_X_..._openmm_refined)
+    """
+    for complex_id, data in cache.items():
+        pdb_path = data.get("pdb_path")
+        if not pdb_path:
+            continue
+        
+        # PDB 파일명에서 키 추출
+        base = pdb_path.stem if hasattr(pdb_path, 'stem') else str(pdb_path)
+        
+        if base in vina_scores:
+            cache[complex_id]["vina_score"] = vina_scores[base]
+            cache[complex_id]["vina_status"] = vina_statuses.get(base, "정상")
+        elif complex_id in vina_scores:
+            cache[complex_id]["vina_score"] = vina_scores[complex_id]
+            cache[complex_id]["vina_status"] = vina_statuses.get(complex_id, "정상")
+
+
+def update_cache_from_plip(cache: dict, plip_scores: dict):
+    """
+    PLIP 점수를 캐시에 업데이트.
+    """
+    for complex_id, data in cache.items():
+        pdb_path = data.get("pdb_path")
+        if not pdb_path:
+            continue
+        
+        base = pdb_path.stem if hasattr(pdb_path, 'stem') else str(pdb_path)
+        
+        plip_data = plip_scores.get(base) or plip_scores.get(complex_id)
+        if plip_data:
+            cache[complex_id]["plip_total"] = plip_data.get("weighted_total")
+            cache[complex_id]["plip_hbond"] = plip_data.get("hbond")
+            cache[complex_id]["plip_hydrophobic"] = plip_data.get("hydro")
+            cache[complex_id]["plip_saltbridge"] = plip_data.get("salt")
+            cache[complex_id]["plip_status"] = plip_data.get("status", "정상")
+
+
+def update_cache_from_prodigy(cache: dict, prodigy_scores: dict, prodigy_statuses: dict):
+    """
+    PRODIGY 점수를 캐시에 업데이트.
+    """
+    for complex_id, data in cache.items():
+        pdb_path = data.get("pdb_path")
+        if not pdb_path:
+            continue
+        
+        base = pdb_path.stem if hasattr(pdb_path, 'stem') else str(pdb_path)
+        
+        if base in prodigy_scores:
+            cache[complex_id]["prodigy_dg"] = prodigy_scores[base]
+            cache[complex_id]["prodigy_status"] = prodigy_statuses.get(base, "정상")
+        elif complex_id in prodigy_scores:
+            cache[complex_id]["prodigy_dg"] = prodigy_scores[complex_id]
+            cache[complex_id]["prodigy_status"] = prodigy_statuses.get(complex_id, "정상")
+
+
+def update_cache_from_iptm(cache: dict, iptm_scores: dict):
+    """
+    ipTM 점수를 캐시에 업데이트.
+    """
+    for complex_id, data in cache.items():
+        pdb_path = data.get("pdb_path")
+        if not pdb_path:
+            continue
+        
+        base = pdb_path.stem if hasattr(pdb_path, 'stem') else str(pdb_path)
+        
+        if base in iptm_scores:
+            cache[complex_id]["iptm"] = iptm_scores[base]
+        elif complex_id in iptm_scores:
+            cache[complex_id]["iptm"] = iptm_scores[complex_id]
+
+
+def get_failed_complexes_from_cache(cache: dict, threshold: float = 100.0) -> list:
+    """
+    캐시에서 실패 복합체 식별 (GBSA > threshold 또는 OpenMM 실패).
+    
+    Returns:
+        list of tuples: [(complex_id, peptide, fail_reason), ...]
+    """
+    failed = []
+    for complex_id, data in cache.items():
+        fail_reason = None
+        gbsa_val = data.get("gbsa")
+        openmm_ok = data.get("openmm_ok", False)
+        
+        # OpenMM 실패 확인
+        if not openmm_ok:
+            fail_reason = "OpenMM 정제 실패"
+        
+        # GBSA 값 확인
+        if gbsa_val is None:
+            if fail_reason:
+                fail_reason += " + GBSA 미계산"
+            else:
+                fail_reason = "GBSA 미계산"
+        elif gbsa_val > threshold:
+            if fail_reason:
+                fail_reason += f" + GBSA > {threshold} ({gbsa_val:.2f})"
+            else:
+                fail_reason = f"GBSA > {threshold} (실제: {gbsa_val:.2f})"
+        
+        if fail_reason:
+            failed.append((complex_id, data["peptide"], fail_reason))
+            print(f"  [FAILED] {complex_id} ({data['peptide']}): {fail_reason}")
+    
+    return failed
 
 def timestamp():
     return datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1746,12 +1919,15 @@ def refine_structures_with_openmm_and_relax(
     md_time_ps: float,
     timestep_fs: float,
     restraint_k: float,
+    results_cache: dict = None,  # 결과 캐시 (Option 3)
 ) -> list[Path]:
     """
     ColabFold rank_001 PDB 리스트를 받아서
     - (선택) OpenMM minimization + short MD
     - (선택) Rosetta Relax
     를 순차적으로 적용하고, 최종 구조 리스트를 반환.
+    
+    Option 3: GBSA 계산 후 results_cache에 저장.
 
     실패 시에는 해당 구조는 원본을 그대로 사용.
     """
@@ -1760,6 +1936,10 @@ def refine_structures_with_openmm_and_relax(
 
     refined_dir = pdb_root_dir / "refined"
     refined_dir.mkdir(parents=True, exist_ok=True)
+    
+    # GBSA 계산용 임시 디렉토리
+    temp_dir = pdb_root_dir / "temp_gbsa"
+    temp_dir.mkdir(parents=True, exist_ok=True)
 
     print("\n" + "=" * 80)
     print("STEP 3b: 구조 후처리 (OpenMM minimization / short MD / Rosetta Relax)")
@@ -1771,8 +1951,10 @@ def refine_structures_with_openmm_and_relax(
     refined_pdbs: list[Path] = []
 
     for i, pdb_path in enumerate(rank1_pdbs, start=1):
+        complex_id = f"complex_{i-1}"  # 0-indexed
         print(f"\n[REFINE] ({i}/{len(rank1_pdbs)}) {pdb_path.name}")
         current = pdb_path
+        openmm_ok = False
 
         # 1) OpenMM minimization + short MD
         if _OPENMM_AVAILABLE:
@@ -1786,6 +1968,7 @@ def refine_structures_with_openmm_and_relax(
                     restraint_k=restraint_k,
                 )
                 current = out_openmm
+                openmm_ok = True
             except Exception as e:
                 print(f"[WARN] OpenMM 기반 refinement 실패, 원본 구조 유지: {e}")
         # OpenMM은 필수이므로 else 블록 제거
@@ -1803,6 +1986,24 @@ def refine_structures_with_openmm_and_relax(
 
         refined_pdbs.append(current)
         print(f"[REFINE] 최종 사용 구조: {current.name}")
+        
+        # 3) GBSA 계산 및 캐시 업데이트 (Option 3)
+        gbsa_result = None
+        if results_cache is not None:
+            try:
+                print(f"[GBSA] {current.name} 결합 에너지 계산 중...")
+                gbsa_result = compute_openmm_gbsa_binding_energy(current, temp_dir)
+                gbsa_val = gbsa_result.get("GBSA_bind")
+                if gbsa_val is not None:
+                    print(f"[GBSA] GBSA_bind = {gbsa_val:.2f} kcal/mol")
+                else:
+                    print(f"[GBSA] 계산 실패: {gbsa_result.get('status')}")
+            except Exception as e:
+                print(f"[WARN] GBSA 계산 실패: {e}")
+                gbsa_result = {"status": f"실패: {e}", "GBSA_bind": None}
+            
+            # 캐시 업데이트
+            update_cache_from_openmm(results_cache, complex_id, current, openmm_ok, gbsa_result)
 
     print(f"\n[INFO] 구조 후처리 완료. 총 {len(refined_pdbs)}개 구조 반환.")
     print("=" * 80)
@@ -3104,10 +3305,14 @@ def build_and_save_final_table(
     start_time: datetime | None = None,
     end_time: datetime | None = None,
     step_timings: list[dict] | None = None,
+    results_cache: dict = None,  # Option 3: 캐시에서 값 가져오기
 ):
     """
     ColabFold / Vina / PLIP / PRODIGY / ipTM 결과를 모아서
     A안 가중치로 FinalScore_A를 계산하고 엑셀로 저장.
+
+    Option 3: results_cache가 제공되면 캐시에서 값을 가져오고,
+              없으면 기존 방식으로 계산/로드.
 
     A안:
       PRODIGY 0.50  (ΔG, 더 작을수록 좋음)
@@ -3166,8 +3371,15 @@ def build_and_save_final_table(
 
     rows = []
     for pdb_path in rank1_pdbs:
-        base = pdb_path.stem                                       # complex_0_unrelaxed_...
-        candidate_id = base.split("_unrelaxed")[0]                  # complex_0
+        base = pdb_path.stem                                       # complex_0_unrelaxed_..._openmm_refined
+        
+        # candidate_id 추출 (complex_0, complex_1, ...)
+        match = re.match(r'(complex_\d+)', base)
+        if match:
+            candidate_id = match.group(1)
+        else:
+            candidate_id = base.split("_unrelaxed")[0]
+        
         pep_seq = id_to_pep.get(candidate_id, "")
 
         vina    = vina_vals.get(base)
@@ -3186,13 +3398,26 @@ def build_and_save_final_table(
             alphafold_status = "신뢰도 있는 결합 복합체 형성 실패(단일체 구조)"
         else:
             alphafold_status = "정상(단백질-펩타이드 복합체)"
-        # OpenMM GBSA(MM-GBSA 스타일) 결합 에너지 계산
-        gbsa_res = compute_openmm_gbsa_binding_energy(pdb_path, folders["temp"])
-        gbsa_status = gbsa_res.get("status")
-        gbsa_bind = gbsa_res.get("GBSA_bind")
-        gbsa_e_complex = gbsa_res.get("E_complex")
-        gbsa_e_receptor = gbsa_res.get("E_receptor")
-        gbsa_e_peptide = gbsa_res.get("E_peptide")
+        
+        # Option 3: GBSA 값은 캐시에서 가져오기 (재계산 안함)
+        if results_cache and candidate_id in results_cache:
+            cache_data = results_cache[candidate_id]
+            gbsa_status = cache_data.get("gbsa_status")
+            gbsa_bind = cache_data.get("gbsa")
+            gbsa_e_complex = cache_data.get("gbsa_e_complex")
+            gbsa_e_receptor = cache_data.get("gbsa_e_receptor")
+            gbsa_e_peptide = cache_data.get("gbsa_e_peptide")
+            retry_round = cache_data.get("retry_round", 0)
+        else:
+            # 캐시 없으면 직접 계산 (구버전 호환용)
+            gbsa_res = compute_openmm_gbsa_binding_energy(pdb_path, folders["temp"])
+            gbsa_status = gbsa_res.get("status")
+            gbsa_bind = gbsa_res.get("GBSA_bind")
+            gbsa_e_complex = gbsa_res.get("E_complex")
+            gbsa_e_receptor = gbsa_res.get("E_receptor")
+            gbsa_e_peptide = gbsa_res.get("E_peptide")
+            retry_round = 0
+
 
 
         # 이 complex의 status 문자열 가져오기
@@ -3246,6 +3471,7 @@ def build_and_save_final_table(
             "gbsa_e_receptor":  gbsa_e_receptor,
             "gbsa_e_peptide":   gbsa_e_peptide,
             "gbsa_bind":        gbsa_bind,
+            "retry_round":      retry_round,  # Option 3: 재시도 라운드 기록
             "complex_stem":     base,
 
         })
@@ -3491,44 +3717,14 @@ def identify_failed_complexes(
 ) -> list:
     """
     GBSA > threshold 또는 OpenMM 실패인 복합체 식별.
+    GBSA는 각 PDB에서 직접 계산 (기존 파일 의존 제거).
     
     Returns:
         list of tuples: [(원본_인덱스, 펩타이드_서열, 실패_이유), ...]
     """
     failed = []
-    import pandas as pd
     
-    # GBSA 데이터 수집 (여러 소스에서)
-    gbsa_data = {}
-    
-    # 1) 최종 Excel 파일에서 GBSA_bind 읽기 (가장 정확한 소스)
-    xlsx_files = list(results_dir.glob("final_peptide_rank_*.xlsx"))
-    if xlsx_files:
-        latest_xlsx = max(xlsx_files, key=lambda x: x.stat().st_mtime)
-        try:
-            df_excel = pd.read_excel(latest_xlsx, sheet_name="all_metrics")
-            for _, row in df_excel.iterrows():
-                cid = row.get("candidate_id", "")
-                gbsa_bind = row.get("GBSA_bind")
-                if cid and gbsa_bind is not None and not pd.isna(gbsa_bind):
-                    gbsa_data[cid] = float(gbsa_bind)
-            print(f"  [INFO] GBSA 데이터 로드: {latest_xlsx.name} ({len(gbsa_data)}개)")
-        except Exception as e:
-            print(f"  [WARN] Excel에서 GBSA 읽기 실패: {e}")
-    
-    # 2) gbsa_summary.csv 파일에서 보충
-    gbsa_summary_path = results_dir / "gbsa_summary.csv"
-    if gbsa_summary_path.exists():
-        try:
-            df_gbsa = pd.read_csv(gbsa_summary_path)
-            for _, row in df_gbsa.iterrows():
-                complex_name = row.get("complex", "")
-                gbsa_bind = row.get("GBSA_bind")
-                if complex_name and gbsa_bind is not None and not pd.isna(gbsa_bind):
-                    if complex_name not in gbsa_data:  # Excel에서 이미 읽은 값 유지
-                        gbsa_data[complex_name] = float(gbsa_bind)
-        except Exception as e:
-            print(f"  [WARN] gbsa_summary.csv 읽기 실패: {e}")
+    print(f"  [INFO] {len(rank1_pdbs)}개 복합체 GBSA 계산 및 실패 여부 확인 중...")
     
     # 각 복합체 검사
     for i, peptide in enumerate(peptides):
@@ -3544,15 +3740,19 @@ def identify_failed_complexes(
         if "_openmm_refined" not in pdb_str:
             fail_reason = "OpenMM 정제 실패 (원본 ColabFold PDB 사용)"
         
-        # 2) GBSA 값 확인 (OpenMM 성공해도 GBSA가 높으면 실패)
-        if complex_name in gbsa_data:
-            gbsa_val = gbsa_data[complex_name]
+        # 2) GBSA 값 직접 계산 (OpenMM 성공해도 GBSA가 높으면 실패)
+        try:
+            gbsa_result = compute_openmm_gbsa_binding_energy(pdb_path)
+            gbsa_val = gbsa_result.get("GBSA_bind")
             if gbsa_val is not None and isinstance(gbsa_val, (int, float)):
                 if gbsa_val > threshold:
                     if fail_reason:
                         fail_reason += f" + GBSA > {threshold} ({gbsa_val:.2f})"
                     else:
                         fail_reason = f"GBSA > {threshold} (실제: {gbsa_val:.2f})"
+        except Exception as e:
+            if not fail_reason:
+                fail_reason = f"GBSA 계산 실패: {e}"
         
         # 3) 원자 충돌 확인 (간단한 체크)
         if not fail_reason:
@@ -3873,6 +4073,10 @@ def main():
     step2_end = datetime.now()
     print_step_timing("STEP 2: PepMLM 기반 펩타이드 생성", step2_start, step2_end)
 
+    # ★ Option 3: 결과 캐시 초기화
+    results_cache = init_results_cache(peptides)
+    print(f"[INFO] 결과 캐시 초기화 완료 ({len(results_cache)}개 복합체)")
+
     # STEP 3: ColabFold 구조 예측
     rank1_pdbs = []
     if RUN_COLABFOLD and peptides:
@@ -3910,6 +4114,7 @@ def main():
             md_time_ps=REFINE_MD_TIME_PS,
             timestep_fs=REFINE_TIMESTEP_FS,
             restraint_k=REFINE_RESTRAINT_K,
+            results_cache=results_cache,  # Option 3: 캐시에 GBSA 저장
         )
         step3b_end = datetime.now()
         print_step_timing("STEP 3b: 구조 후처리 (minimization/relax/MD)", step3b_start, step3b_end)
@@ -3924,6 +4129,11 @@ def main():
         run_vina_on_rank1(rank1_pdbs, folders["vina"])
         step4_end = datetime.now()
         print_step_timing("STEP 4: AutoDock Vina 도킹", step4_start, step4_end)
+        
+        # Option 3: Vina 결과를 캐시에 업데이트
+        vina_scores, vina_statuses = load_vina_scores(folders["vina"])
+        update_cache_from_vina(results_cache, vina_scores, vina_statuses)
+        print(f"[INFO] Vina 점수 캐시 업데이트 완료 ({len(vina_scores)}개)")
     else:
         now = datetime.now()
         print("\n[INFO] RUN_VINA=False → Vina 단계 스킵")
@@ -3935,6 +4145,11 @@ def main():
         run_plip_on_rank1(rank1_pdbs, folders["plip"])
         step5_end = datetime.now()
         print_step_timing("STEP 5: PLIP 상호작용 분석", step5_start, step5_end)
+        
+        # Option 3: PLIP 결과를 캐시에 업데이트
+        plip_scores, _ = load_plip_scores(folders["plip"])  # 튜플 언패킹
+        update_cache_from_plip(results_cache, plip_scores)
+        print(f"[INFO] PLIP 점수 캐시 업데이트 완료 ({len(plip_scores)}개)")
     else:
         now = datetime.now()
         print("\n[INFO] RUN_PLIP=False → PLIP 단계 스킵")
@@ -3946,51 +4161,46 @@ def main():
         run_prodigy_on_rank1(rank1_pdbs, folders["prodigy"])
         step6_end = datetime.now()
         print_step_timing("STEP 6: PRODIGY 결합 친화도 평가", step6_start, step6_end)
+        
+        # Option 3: PRODIGY 결과를 캐시에 업데이트
+        prodigy_scores, prodigy_statuses = load_prodigy_scores(folders["prodigy"])
+        update_cache_from_prodigy(results_cache, prodigy_scores, prodigy_statuses)
+        print(f"[INFO] PRODIGY 점수 캐시 업데이트 완료 ({len(prodigy_scores)}개)")
     else:
         now = datetime.now()
         print("\n[INFO] RUN_PRODIGY=False → PRODIGY 단계 스킵")
         print_step_timing("STEP 6: PRODIGY 결합 친화도 평가 (스킵)", now, now)
 
-    # STEP 7: rank_001 PDB zip + 최종 엑셀 (1차)
-    step7_start = datetime.now()
-    pdb_zip = None
-    final_xlsx = None
-
-    if rank1_pdbs:
-        pdb_zip = zip_rank1_pdbs(rank1_pdbs, folders["results"])
-    else:
-        print("[INFO] rank_001 PDB가 없어 zip/엑셀 생성을 생략합니다.")
-
-    step7_end = datetime.now()
-    print_step_timing("STEP 7: 결과 zip 생성", step7_start, step7_end)
+    # ipTM 점수 로드 및 캐시 업데이트
+    iptm_scores = load_iptm_scores(folders["colabfold_out"], rank1_pdbs, folders["pdb"])
+    update_cache_from_iptm(results_cache, iptm_scores)
+    print(f"[INFO] ipTM 점수 캐시 업데이트 완료 ({len(iptm_scores)}개)")
 
     # ─────────────────────────────────────────────────────────────────────
-    # STEP 8: 실패 복합체 자동 재시도 (pepbind05 신규)
+    # STEP 7: 실패 복합체 자동 재시도 (Option 3: 캐시 기반)
     # ─────────────────────────────────────────────────────────────────────
     if RUN_RETRY and rank1_pdbs and peptides:
-        step8_start = datetime.now()
+        step7_start = datetime.now()
         
         print("\n" + "=" * 80)
-        print("STEP 8: 실패 복합체 자동 재시도")
+        print("STEP 7: 실패 복합체 자동 재시도 (캐시 기반)")
         print("=" * 80)
         print(f"  MAX_RETRY_ROUNDS       = {MAX_RETRY_ROUNDS}")
         print(f"  GBSA_FAILURE_THRESHOLD = {GBSA_FAILURE_THRESHOLD}")
         print(f"  RETRY_RANDOM_SEED_OFFSET = {RETRY_RANDOM_SEED_OFFSET}")
         print(f"  전체 복합체 개수        = {len(peptides)}")
         
-        # 초기 실패 복합체 탐지
-        print(f"\n[초기 탐지] 실패 복합체 확인 중...")
-        initial_failed = identify_failed_complexes(
-            peptides,
-            rank1_pdbs,
-            folders["results"],
+        # 초기 실패 복합체 탐지 (캐시에서)
+        print(f"\n[초기 탐지] 캐시에서 실패 복합체 확인 중...")
+        initial_failed = get_failed_complexes_from_cache(
+            results_cache,
             threshold=GBSA_FAILURE_THRESHOLD,
         )
         
         if not initial_failed:
             print("✅ 모든 복합체가 정상 범위 내 → 재시도 불필요")
-            step8_end = datetime.now()
-            print_step_timing("STEP 8: 실패 복합체 재시도 (불필요)", step8_start, step8_end)
+            step7_end = datetime.now()
+            print_step_timing("STEP 7: 실패 복합체 재시도 (불필요)", step7_start, step7_end)
         else:
             print(f"❌ 실패 복합체 {len(initial_failed)}개 발견 (전체 {len(peptides)}개 중)")
             
@@ -4002,11 +4212,9 @@ def main():
                 print(f"[재시도 {retry_round}/{MAX_RETRY_ROUNDS}] 시작")
                 print(f"{'='*60}")
                 
-                # 현재 실패 복합체 재확인
-                failed = identify_failed_complexes(
-                    peptides,
-                    rank1_pdbs,
-                    folders["results"],
+                # 현재 실패 복합체 재확인 (캐시에서)
+                failed = get_failed_complexes_from_cache(
+                    results_cache,
                     threshold=GBSA_FAILURE_THRESHOLD,
                 )
                 
@@ -4022,15 +4230,15 @@ def main():
                 print(f"   - 현재 실패 복합체: {len(failed)}개")
                 print(f"   - 복구된 복합체: {len(initial_failed) - len(failed)}개")
                 print(f"\n재시도 대상 {len(failed)}개:")
-                for idx, pep, reason in failed:
-                    print(f"  - complex_{idx} ({pep}): {reason}")
+                for complex_id, pep, reason in failed:
+                    print(f"  - {complex_id} ({pep}): {reason}")
                 
-                # 8-2: ColabFold 재실행 (다른 seed)
+                # 7-2: ColabFold 재실행 (다른 seed)
                 retry_output_dir = folders["pdb"] / f"colabfold_retry_{retry_round}"
                 retry_output_dir.mkdir(parents=True, exist_ok=True)
                 
                 peptides_to_retry = [pep for _, pep, _ in failed]
-                original_indices = [idx for idx, _, _ in failed]
+                original_indices = [results_cache[cid]["index"] for cid, _, _ in failed]
                 
                 retry_pdbs = run_colabfold_for_subset(
                     peptides_to_retry,
@@ -4045,25 +4253,83 @@ def main():
                     print(f"[WARN] ColabFold 재시도 결과 없음")
                     continue
                 
-                # 8-3: OpenMM + Vina + PLIP + PRODIGY
-                retry_results = process_retry_complexes_pipeline(
-                    retry_pdbs,
-                    folders,
-                )
+                # 7-3: 재시도된 복합체에 대해 OpenMM + GBSA 재계산
+                print(f"\n[재시도 {retry_round}] OpenMM 정제 + GBSA 재계산 중...")
+                temp_dir = folders["pdb"] / "temp_gbsa"
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                refined_dir = folders["pdb"] / "refined"
+                refined_dir.mkdir(parents=True, exist_ok=True)
                 
-                # 8-4: 결과 병합 (개선된 결과만 업데이트)
-                rank1_pdbs = merge_retry_results(rank1_pdbs, retry_results)
+                for retry_item in retry_pdbs:
+                    # run_colabfold_for_subset은 (orig_idx, pdb_path) 튜플 반환
+                    orig_idx, pdb_path = retry_item
+                    
+                    # complex_id 추출
+                    complex_id = f"complex_{orig_idx}"
+                    
+                    if complex_id not in results_cache:
+                        continue
+                    
+                    old_gbsa = results_cache[complex_id].get("gbsa")
+                    print(f"\n  [{complex_id}] 재시도 처리 중 (기존 GBSA: {old_gbsa})")
+                    
+                    # OpenMM 정제
+                    openmm_ok = False
+                    current = pdb_path
+                    try:
+                        out_openmm = refined_dir / f"{pdb_path.stem}_openmm_refined.pdb"
+                        openmm_minimize_and_md(
+                            current,
+                            out_openmm,
+                            md_time_ps=REFINE_MD_TIME_PS,
+                            timestep_fs=REFINE_TIMESTEP_FS,
+                            restraint_k=REFINE_RESTRAINT_K,
+                        )
+                        current = out_openmm
+                        openmm_ok = True
+                    except Exception as e:
+                        print(f"    [WARN] OpenMM 실패: {e}")
+                    
+                    # GBSA 계산
+                    try:
+                        gbsa_result = compute_openmm_gbsa_binding_energy(current, temp_dir)
+                        new_gbsa = gbsa_result.get("GBSA_bind")
+                    except Exception as e:
+                        print(f"    [WARN] GBSA 계산 실패: {e}")
+                        new_gbsa = None
+                        gbsa_result = {"status": f"실패: {e}", "GBSA_bind": None}
+                    
+                    # 개선된 경우만 캐시 업데이트
+                    if new_gbsa is not None:
+                        old_gbsa_val = old_gbsa if old_gbsa is not None else float("inf")
+                        if new_gbsa < old_gbsa_val:
+                            print(f"    ✅ 개선됨: {old_gbsa_val:.2f} → {new_gbsa:.2f} kcal/mol")
+                            results_cache[complex_id]["pdb_path"] = current
+                            results_cache[complex_id]["openmm_ok"] = openmm_ok
+                            results_cache[complex_id]["gbsa"] = new_gbsa
+                            results_cache[complex_id]["gbsa_status"] = gbsa_result.get("status")
+                            results_cache[complex_id]["gbsa_e_complex"] = gbsa_result.get("E_complex")
+                            results_cache[complex_id]["gbsa_e_receptor"] = gbsa_result.get("E_receptor")
+                            results_cache[complex_id]["gbsa_e_peptide"] = gbsa_result.get("E_peptide")
+                            results_cache[complex_id]["retry_round"] = retry_round
+                            
+                            # rank1_pdbs 리스트도 업데이트
+                            idx = results_cache[complex_id]["index"]
+                            if idx < len(rank1_pdbs):
+                                rank1_pdbs[idx] = current
+                        else:
+                            print(f"    ❌ 개선 안됨: {old_gbsa_val:.2f} → {new_gbsa:.2f} kcal/mol (기존 유지)")
+                    else:
+                        print(f"    ❌ GBSA 미계산 (기존 유지)")
                 
-                print(f"\n[재시도 {retry_round}] 완료 - 결과 병합됨")
+                print(f"\n[재시도 {retry_round}] 완료")
             
             # 최종 요약
             print(f"\n{'='*60}")
-            print(f"STEP 8 최종 요약")
+            print(f"STEP 7 최종 요약")
             print(f"{'='*60}")
-            final_failed = identify_failed_complexes(
-                peptides,
-                rank1_pdbs,
-                folders["results"],
+            final_failed = get_failed_complexes_from_cache(
+                results_cache,
                 threshold=GBSA_FAILURE_THRESHOLD,
             )
             print(f"  초기 실패 복합체: {len(initial_failed)}개")
@@ -4071,23 +4337,32 @@ def main():
             print(f"  복구 성공: {len(initial_failed) - len(final_failed)}개")
             print(f"  재시도 횟수: {retry_round}회")
             
-            step8_end = datetime.now()
-            print_step_timing(f"STEP 8: 실패 복합체 재시도 ({retry_round}회)", step8_start, step8_end)
+            step7_end = datetime.now()
+            print_step_timing(f"STEP 7: 실패 복합체 재시도 ({retry_round}회)", step7_start, step7_end)
     else:
         now = datetime.now()
         if not RUN_RETRY:
             print("\n[INFO] RUN_RETRY=False → 재시도 단계 스킵")
-        print_step_timing("STEP 8: 실패 복합체 재시도 (스킵)", now, now)
+        print_step_timing("STEP 7: 실패 복합체 재시도 (스킵)", now, now)
 
     # ─────────────────────────────────────────────────────────────────────
-    # STEP 9: 최종 결과 엑셀 생성
+    # STEP 8: 최종 결과 엑셀 및 PDB zip 생성
     # ─────────────────────────────────────────────────────────────────────
-    step9_start = datetime.now()
+    step8_start = datetime.now()
+    pdb_zip = None
+    final_xlsx = None
 
     # 전체 파이프라인 종료 시간 및 소요 시간
     global END_TIME
     END_TIME = datetime.now()
 
+    # 최종 PDB zip 생성 (재시도 결과 포함)
+    if rank1_pdbs:
+        pdb_zip = zip_rank1_pdbs(rank1_pdbs, folders["results"])
+        print(f"  [INFO] 최종 PDB zip에 {len(rank1_pdbs)}개 복합체 포함")
+    else:
+        print("[INFO] rank_001 PDB가 없어 zip 생성을 생략합니다.")
+    
     # STEP_TIMINGS / START_TIME / END_TIME 을 포함해서 최종 엑셀 생성
     if rank1_pdbs:
         final_xlsx = build_and_save_final_table(
@@ -4097,10 +4372,11 @@ def main():
             start_time=START_TIME,
             end_time=END_TIME,
             step_timings=STEP_TIMINGS,
+            results_cache=results_cache,  # Option 3: 캐시에서 값 가져오기
         )
     
-    step9_end = datetime.now()
-    print_step_timing("STEP 9: 최종 엑셀 생성", step9_start, step9_end)
+    step8_end = datetime.now()
+    print_step_timing("STEP 8: 최종 엑셀 및 PDB zip 생성", step8_start, step8_end)
 
     print("\n" + "=" * 80)
     print("🎉 파이프라인 실행 종료")
