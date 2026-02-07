@@ -3391,6 +3391,10 @@ def build_and_save_final_table(
         plip_hbond  = plip_data.get("hbond")
         plip_hphob  = plip_data.get("hydrophobic")
         plip_salt   = plip_data.get("saltbridge")
+        
+        vina_st    = vina_status.get(base, "미기록")
+        prodigy_st = prodigy_status.get(base, "미기록")
+        plip_st    = plip_status.get(base, "미기록")
 
         # 체인 수 확인해서 AlphaFold 상태 결정
         chain_counts = get_chain_residue_counts(pdb_path)
@@ -3399,15 +3403,41 @@ def build_and_save_final_table(
         else:
             alphafold_status = "정상(단백질-펩타이드 복합체)"
         
-        # Option 3: GBSA 값은 캐시에서 가져오기 (재계산 안함)
+        # Option 3: 캐시에서 값 가져오기 (재시도된 복합체의 경우 캐시 우선)
         if results_cache and candidate_id in results_cache:
             cache_data = results_cache[candidate_id]
+            
+            # GBSA 값
             gbsa_status = cache_data.get("gbsa_status")
             gbsa_bind = cache_data.get("gbsa")
             gbsa_e_complex = cache_data.get("gbsa_e_complex")
             gbsa_e_receptor = cache_data.get("gbsa_e_receptor")
             gbsa_e_peptide = cache_data.get("gbsa_e_peptide")
             retry_round = cache_data.get("retry_round", 0)
+            
+            # ★ 재시도된 복합체는 캐시의 평가 점수 우선 사용
+            if retry_round > 0:
+                # Vina 캐시
+                if cache_data.get("vina_score") is not None:
+                    vina = cache_data.get("vina_score")
+                    vina_st = cache_data.get("vina_status", "정상")
+                
+                # PLIP 캐시
+                if cache_data.get("plip_total") is not None:
+                    plip_total = cache_data.get("plip_total")
+                    plip_hbond = cache_data.get("plip_hbond")
+                    plip_hphob = cache_data.get("plip_hydrophobic")
+                    plip_salt = cache_data.get("plip_saltbridge")
+                    plip_st = cache_data.get("plip_status", "정상")
+                
+                # PRODIGY 캐시
+                if cache_data.get("prodigy_dg") is not None:
+                    prodigy = cache_data.get("prodigy_dg")
+                    prodigy_st = cache_data.get("prodigy_status", "정상")
+                
+                # ipTM 캐시
+                if cache_data.get("iptm") is not None:
+                    iptm = cache_data.get("iptm")
         else:
             # 캐시 없으면 직접 계산 (구버전 호환용)
             gbsa_res = compute_openmm_gbsa_binding_energy(pdb_path, folders["temp"])
@@ -3418,12 +3448,6 @@ def build_and_save_final_table(
             gbsa_e_peptide = gbsa_res.get("E_peptide")
             retry_round = 0
 
-
-
-        # 이 complex의 status 문자열 가져오기
-        vina_st    = vina_status.get(base, "미기록")
-        prodigy_st = prodigy_status.get(base, "미기록")
-        plip_st    = plip_status.get(base, "미기록")
 
         # status + 값 유효성 체크
         vina_ok    = is_status_ok(vina_st)    and has_valid_value(vina)
@@ -4317,6 +4341,54 @@ def main():
                             idx = results_cache[complex_id]["index"]
                             if idx < len(rank1_pdbs):
                                 rank1_pdbs[idx] = current
+                            
+                            # ★ 평가 모델 재실행 (Vina, PLIP, PRODIGY)
+                            print(f"    [평가] Vina/PLIP/PRODIGY 재실행 중...")
+                            
+                            # Vina 실행
+                            if RUN_VINA:
+                                try:
+                                    run_vina_on_rank1([current], folders["vina"])
+                                    vina_scores, vina_statuses = load_vina_scores(folders["vina"])
+                                    base = current.stem
+                                    if base in vina_scores:
+                                        results_cache[complex_id]["vina_score"] = vina_scores[base]
+                                        results_cache[complex_id]["vina_status"] = vina_statuses.get(base, "정상")
+                                        print(f"      Vina: {vina_scores[base]:.2f} kcal/mol")
+                                except Exception as e:
+                                    print(f"      [WARN] Vina 실패: {e}")
+                            
+                            # PLIP 실행
+                            if RUN_PLIP:
+                                try:
+                                    run_plip_on_rank1([current], folders["plip"])
+                                    plip_scores, _ = load_plip_scores(folders["plip"])
+                                    base = current.stem
+                                    plip_data = plip_scores.get(base)
+                                    if plip_data:
+                                        results_cache[complex_id]["plip_total"] = plip_data.get("weighted_total")
+                                        results_cache[complex_id]["plip_hbond"] = plip_data.get("hbond")
+                                        results_cache[complex_id]["plip_hydrophobic"] = plip_data.get("hydro")
+                                        results_cache[complex_id]["plip_saltbridge"] = plip_data.get("salt")
+                                        results_cache[complex_id]["plip_status"] = plip_data.get("status", "정상")
+                                        print(f"      PLIP: {plip_data.get('weighted_total')} interactions")
+                                except Exception as e:
+                                    print(f"      [WARN] PLIP 실패: {e}")
+                            
+                            # PRODIGY 실행
+                            if RUN_PRODIGY:
+                                try:
+                                    run_prodigy_on_rank1([current], folders["prodigy"])
+                                    prodigy_scores, prodigy_statuses = load_prodigy_scores(folders["prodigy"])
+                                    base = current.stem
+                                    if base in prodigy_scores:
+                                        results_cache[complex_id]["prodigy_dg"] = prodigy_scores[base]
+                                        results_cache[complex_id]["prodigy_status"] = prodigy_statuses.get(base, "정상")
+                                        print(f"      PRODIGY: {prodigy_scores[base]:.2f} kcal/mol")
+                                except Exception as e:
+                                    print(f"      [WARN] PRODIGY 실패: {e}")
+                            
+                            print(f"    [평가] 완료")
                         else:
                             print(f"    ❌ 개선 안됨: {old_gbsa_val:.2f} → {new_gbsa:.2f} kcal/mol (기존 유지)")
                     else:
