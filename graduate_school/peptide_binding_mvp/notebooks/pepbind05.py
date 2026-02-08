@@ -452,6 +452,93 @@ def get_failed_complexes_from_cache(cache: dict, threshold: float = 100.0) -> li
     
     return failed
 
+
+def update_summary_files_from_cache(results_cache: dict, folders: dict) -> None:
+    """
+    재시도 후 캐시의 최종 평가 값으로 summary Excel 파일들을 업데이트합니다.
+    재시도된 복합체(retry_round > 0)의 값만 업데이트합니다.
+    
+    Args:
+        results_cache: 모든 평가 결과가 저장된 캐시 딕셔너리
+        folders: 워크스페이스 폴더 딕셔너리
+    """
+    import pandas as pd
+    
+    # 재시도된 복합체만 추출
+    retried = {cid: data for cid, data in results_cache.items() 
+               if data.get("retry_round", 0) > 0}
+    
+    if not retried:
+        print("[INFO] 재시도된 복합체 없음 - summary 업데이트 스킵")
+        return
+    
+    print(f"\n[Summary 업데이트] {len(retried)}개 재시도 복합체의 최종 값 반영 중...")
+    
+    # 1. Vina summary 업데이트
+    vina_summary = folders["vina"] / "vina_summary.xlsx"
+    if vina_summary.exists():
+        try:
+            df = pd.read_excel(vina_summary)
+            for cid, data in retried.items():
+                if data.get("vina_score") is not None:
+                    pdb_path = data.get("pdb_path")
+                    if pdb_path:
+                        base = pdb_path.stem
+                        # complex_id로 매칭
+                        mask = df["complex_id"].str.startswith(cid + "_") | (df["complex_id"] == cid)
+                        if mask.any():
+                            df.loc[mask, "vina_score"] = data["vina_score"]
+                            df.loc[mask, "status"] = data.get("vina_status", "정상")
+                            df.loc[mask, "complex_pdb"] = base + ".pdb"
+            df.to_excel(vina_summary, index=False)
+            print(f"  [Vina] {vina_summary.name} 업데이트 완료")
+        except Exception as e:
+            print(f"  [WARN] Vina summary 업데이트 실패: {e}")
+    
+    # 2. PLIP summary 업데이트
+    plip_summary = folders["plip"] / "plip_summary.xlsx"
+    if plip_summary.exists():
+        try:
+            df = pd.read_excel(plip_summary)
+            for cid, data in retried.items():
+                if data.get("plip_total") is not None:
+                    pdb_path = data.get("pdb_path")
+                    if pdb_path:
+                        base = pdb_path.stem
+                        mask = df["complex_id"].str.startswith(cid + "_") | (df["complex_id"] == cid)
+                        if mask.any():
+                            df.loc[mask, "weighted_total"] = data["plip_total"]
+                            df.loc[mask, "hbond"] = data.get("plip_hbond")
+                            df.loc[mask, "hydro"] = data.get("plip_hydrophobic")
+                            df.loc[mask, "salt"] = data.get("plip_saltbridge")
+                            df.loc[mask, "status"] = data.get("plip_status", "정상")
+            df.to_excel(plip_summary, index=False)
+            print(f"  [PLIP] {plip_summary.name} 업데이트 완료")
+        except Exception as e:
+            print(f"  [WARN] PLIP summary 업데이트 실패: {e}")
+    
+    # 3. PRODIGY summary 업데이트
+    prodigy_summary = folders["prodigy"] / "prodigy_summary.xlsx"
+    if prodigy_summary.exists():
+        try:
+            df = pd.read_excel(prodigy_summary)
+            for cid, data in retried.items():
+                if data.get("prodigy_dg") is not None:
+                    pdb_path = data.get("pdb_path")
+                    if pdb_path:
+                        base = pdb_path.stem
+                        mask = df["complex_id"].str.startswith(cid + "_") | (df["complex_id"] == cid)
+                        if mask.any():
+                            df.loc[mask, "prodigy_dG"] = data["prodigy_dg"]
+                            df.loc[mask, "status"] = data.get("prodigy_status", "정상")
+            df.to_excel(prodigy_summary, index=False)
+            print(f"  [PRODIGY] {prodigy_summary.name} 업데이트 완료")
+        except Exception as e:
+            print(f"  [WARN] PRODIGY summary 업데이트 실패: {e}")
+    
+    print(f"[Summary 업데이트] 완료")
+
+
 def timestamp():
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -4277,25 +4364,25 @@ def main():
                     print(f"[WARN] ColabFold 재시도 결과 없음")
                     continue
                 
-                # 7-3: 재시도된 복합체에 대해 OpenMM + GBSA 재계산
-                print(f"\n[재시도 {retry_round}] OpenMM 정제 + GBSA 재계산 중...")
+                # 7-3: 배치 처리 - 모든 복합체 OpenMM 정제 + GBSA 계산
+                print(f"\n[재시도 {retry_round}] 단계 1: OpenMM 정제 + GBSA 계산 ({len(retry_pdbs)}개)")
                 temp_dir = folders["pdb"] / "temp_gbsa"
                 temp_dir.mkdir(parents=True, exist_ok=True)
                 refined_dir = folders["pdb"] / "refined"
                 refined_dir.mkdir(parents=True, exist_ok=True)
                 
+                # 개선된 복합체 목록 수집
+                improved_complexes = []  # [(complex_id, refined_pdb_path), ...]
+                
                 for retry_item in retry_pdbs:
-                    # run_colabfold_for_subset은 (orig_idx, pdb_path) 튜플 반환
                     orig_idx, pdb_path = retry_item
-                    
-                    # complex_id 추출
                     complex_id = f"complex_{orig_idx}"
                     
                     if complex_id not in results_cache:
                         continue
                     
                     old_gbsa = results_cache[complex_id].get("gbsa")
-                    print(f"\n  [{complex_id}] 재시도 처리 중 (기존 GBSA: {old_gbsa})")
+                    print(f"\n  [{complex_id}] 처리 중 (기존 GBSA: {old_gbsa})")
                     
                     # OpenMM 정제
                     openmm_ok = False
@@ -4323,7 +4410,7 @@ def main():
                         new_gbsa = None
                         gbsa_result = {"status": f"실패: {e}", "GBSA_bind": None}
                     
-                    # 개선된 경우만 캐시 업데이트
+                    # 개선된 경우만 캐시 업데이트 및 목록 추가
                     if new_gbsa is not None:
                         old_gbsa_val = old_gbsa if old_gbsa is not None else float("inf")
                         if new_gbsa < old_gbsa_val:
@@ -4342,57 +4429,70 @@ def main():
                             if idx < len(rank1_pdbs):
                                 rank1_pdbs[idx] = current
                             
-                            # ★ 평가 모델 재실행 (Vina, PLIP, PRODIGY)
-                            print(f"    [평가] Vina/PLIP/PRODIGY 재실행 중...")
-                            
-                            # Vina 실행
-                            if RUN_VINA:
-                                try:
-                                    run_vina_on_rank1([current], folders["vina"])
-                                    vina_scores, vina_statuses = load_vina_scores(folders["vina"])
-                                    base = current.stem
-                                    if base in vina_scores:
-                                        results_cache[complex_id]["vina_score"] = vina_scores[base]
-                                        results_cache[complex_id]["vina_status"] = vina_statuses.get(base, "정상")
-                                        print(f"      Vina: {vina_scores[base]:.2f} kcal/mol")
-                                except Exception as e:
-                                    print(f"      [WARN] Vina 실패: {e}")
-                            
-                            # PLIP 실행
-                            if RUN_PLIP:
-                                try:
-                                    run_plip_on_rank1([current], folders["plip"])
-                                    plip_scores, _ = load_plip_scores(folders["plip"])
-                                    base = current.stem
-                                    plip_data = plip_scores.get(base)
-                                    if plip_data:
-                                        results_cache[complex_id]["plip_total"] = plip_data.get("weighted_total")
-                                        results_cache[complex_id]["plip_hbond"] = plip_data.get("hbond")
-                                        results_cache[complex_id]["plip_hydrophobic"] = plip_data.get("hydro")
-                                        results_cache[complex_id]["plip_saltbridge"] = plip_data.get("salt")
-                                        results_cache[complex_id]["plip_status"] = plip_data.get("status", "정상")
-                                        print(f"      PLIP: {plip_data.get('weighted_total')} interactions")
-                                except Exception as e:
-                                    print(f"      [WARN] PLIP 실패: {e}")
-                            
-                            # PRODIGY 실행
-                            if RUN_PRODIGY:
-                                try:
-                                    run_prodigy_on_rank1([current], folders["prodigy"])
-                                    prodigy_scores, prodigy_statuses = load_prodigy_scores(folders["prodigy"])
-                                    base = current.stem
-                                    if base in prodigy_scores:
-                                        results_cache[complex_id]["prodigy_dg"] = prodigy_scores[base]
-                                        results_cache[complex_id]["prodigy_status"] = prodigy_statuses.get(base, "정상")
-                                        print(f"      PRODIGY: {prodigy_scores[base]:.2f} kcal/mol")
-                                except Exception as e:
-                                    print(f"      [WARN] PRODIGY 실패: {e}")
-                            
-                            print(f"    [평가] 완료")
+                            # 개선된 복합체 목록에 추가
+                            improved_complexes.append((complex_id, current))
                         else:
                             print(f"    ❌ 개선 안됨: {old_gbsa_val:.2f} → {new_gbsa:.2f} kcal/mol (기존 유지)")
                     else:
                         print(f"    ❌ GBSA 미계산 (기존 유지)")
+                
+                # 개선된 복합체가 있으면 배치 평가 수행
+                if improved_complexes:
+                    improved_pdbs = [pdb for _, pdb in improved_complexes]
+                    print(f"\n[재시도 {retry_round}] 단계 2: 개선된 {len(improved_pdbs)}개 복합체 평가")
+                    
+                    # 7-4: 배치 Vina 평가
+                    if RUN_VINA:
+                        print(f"\n  [Vina] {len(improved_pdbs)}개 복합체 도킹 중...")
+                        try:
+                            run_vina_on_rank1(improved_pdbs, folders["vina"])
+                            vina_scores, vina_statuses = load_vina_scores(folders["vina"])
+                            for complex_id, pdb_path in improved_complexes:
+                                base = pdb_path.stem
+                                if base in vina_scores:
+                                    results_cache[complex_id]["vina_score"] = vina_scores[base]
+                                    results_cache[complex_id]["vina_status"] = vina_statuses.get(base, "정상")
+                                    print(f"    {complex_id}: {vina_scores[base]:.2f} kcal/mol")
+                        except Exception as e:
+                            print(f"    [WARN] Vina 배치 실패: {e}")
+                    
+                    # 7-5: 배치 PLIP 평가
+                    if RUN_PLIP:
+                        print(f"\n  [PLIP] {len(improved_pdbs)}개 복합체 상호작용 분석 중...")
+                        try:
+                            run_plip_on_rank1(improved_pdbs, folders["plip"])
+                            plip_scores, _ = load_plip_scores(folders["plip"])
+                            for complex_id, pdb_path in improved_complexes:
+                                base = pdb_path.stem
+                                plip_data = plip_scores.get(base)
+                                if plip_data:
+                                    results_cache[complex_id]["plip_total"] = plip_data.get("weighted_total")
+                                    results_cache[complex_id]["plip_hbond"] = plip_data.get("hbond")
+                                    results_cache[complex_id]["plip_hydrophobic"] = plip_data.get("hydro")
+                                    results_cache[complex_id]["plip_saltbridge"] = plip_data.get("salt")
+                                    results_cache[complex_id]["plip_status"] = plip_data.get("status", "정상")
+                                    print(f"    {complex_id}: {plip_data.get('weighted_total')} interactions")
+                        except Exception as e:
+                            print(f"    [WARN] PLIP 배치 실패: {e}")
+                    
+                    # 7-6: 배치 PRODIGY 평가
+                    if RUN_PRODIGY:
+                        print(f"\n  [PRODIGY] {len(improved_pdbs)}개 복합체 결합 친화도 평가 중...")
+                        try:
+                            run_prodigy_on_rank1(improved_pdbs, folders["prodigy"])
+                            prodigy_scores, prodigy_statuses = load_prodigy_scores(folders["prodigy"])
+                            for complex_id, pdb_path in improved_complexes:
+                                base = pdb_path.stem
+                                if base in prodigy_scores:
+                                    results_cache[complex_id]["prodigy_dg"] = prodigy_scores[base]
+                                    results_cache[complex_id]["prodigy_status"] = prodigy_statuses.get(base, "정상")
+                                    print(f"    {complex_id}: {prodigy_scores[base]:.2f} kcal/mol")
+                        except Exception as e:
+                            print(f"    [WARN] PRODIGY 배치 실패: {e}")
+                    
+                    print(f"\n  ✅ {len(improved_complexes)}개 복합체 평가 완료")
+                else:
+                    print(f"\n  [INFO] 개선된 복합체 없음 - 평가 스킵")
                 
                 print(f"\n[재시도 {retry_round}] 완료")
             
@@ -4408,6 +4508,9 @@ def main():
             print(f"  최종 실패 복합체: {len(final_failed)}개")
             print(f"  복구 성공: {len(initial_failed) - len(final_failed)}개")
             print(f"  재시도 횟수: {retry_round}회")
+            
+            # Summary 파일 업데이트 (재시도된 복합체의 최종 값 반영)
+            update_summary_files_from_cache(results_cache, folders)
             
             step7_end = datetime.now()
             print_step_timing(f"STEP 7: 실패 복합체 재시도 ({retry_round}회)", step7_start, step7_end)
