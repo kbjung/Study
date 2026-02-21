@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>치료방식 비교표 (선 최소화 다크모드)</title>
+    <style>
+        /* 기본 배경 및 폰트 설정 */
+        body {
+            background-color: #121212; /* 다크 그레이 배경 */
+            color: #e0e0e0; /* 기본 텍스트 색상 */
+            font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
+            padding: 20px;
+        }
+
+        /* 표 전체 스타일 */
+        table {
+            width: 100%;
+            border-collapse: collapse; /* 선을 깔끔하게 합치기 위해 */
+            margin-top: 20px;
+            font-size: 0.95rem; /* 내용이 많아 폰트 살짝 줄임 */
+        }
+
+        /* 모든 셀의 기본값: 테두리 없음, 패딩 적용 */
+        th, td {
+            padding: 16px;
+            vertical-align: top; /* 긴 텍스트를 위해 상단 정렬 */
+            text-align: left;
+            border: none; /* [핵심] 모든 테두리 기본 제거 */
+        }
+
+        /* 1. 표 헤더 (thead) 스타일 */
+        thead th {
+            text-align: center;
+            font-weight: 600;
+            color: #ffffff;
+            /* [요청 1] 헤더 하단에만 가로줄 추가 */
+            border-bottom: 2px solid #555; 
+        }
+
+        /* 2. '구분' 열 (tbody의 첫 번째 th) 스타일 */
+        tbody th {
+            text-align: center;
+            font-weight: 600;
+            color: #f0f0f0; /* 내용보다 밝은 텍스트 */
+            width: 22%; /* '구분' 열 너비 고정 */
+            /* [요청 2] '구분' 열 오른쪽에만 세로줄 추가 */
+            border-right: 2px solid #555;
+            vertical-align: middle; /* 이 열은 중앙 정렬이 보기 좋음 */
+        }
+        
+        /* 3. 헤더의 '구분' 셀에도 오른쪽 세로줄 적용 (줄이 이어지도록) */
+        thead th:first-child {
+            /* [요청 2] */
+            border-right: 2px solid #555;
+        }
+
+        /* 4. 실제 내용 셀 (tbody의 td) 스타일 */
+        tbody td {
+            color: #c0c0c0; /* '구분' 열보다 살짝 어두운 텍스트 */
+            padding-left: 20px; /* 왼쪽 열과 구분을 위해 패딩 추가 */
+        }
+
+        /* 마우스 올렸을 때 행 강조 (가독성 향상) */
+        tbody tr:hover th,
+        tbody tr:hover td {
+            background-color: #2a2a2a;
+        }
+    </style>
+</head>
+<body>
+
+    <table>
+        <thead>
+            <tr>
+                <th>구분</th>
+                <th>치료방식 (임상 사용 비율)</th>
+                <th>대표 적용</th>
+                <th>장점</th>
+                <th>단점</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <th>외과적 절제술<br>(≈ 70–80%)</th>
+                <td>병변 부위 절제, Mohs 미세절제 포함</td>
+                <td>거의 모든 BCC•SCC의 1차 치료</td>
+                <td>완치율 높음, 재발률 낮음, 병리학적 경계 확인 가능</td>
+                <td>흉터•변형 위험, 마취•수술 필요, 고령•당뇨 환자 부담</td>
+            </tr>
+            <tr>
+                <th>국소 도포제<br>(Topical therapy, ≈ 10–15%)</th>
+                <td>Imiquimod, 5-FU, 펩타이드/나노제형 등</td>
+                <td>표재성 BCC, 전암성 병변(Actinic keratosis)</td>
+                <td>비침습적, 자가치료 가능, 미용적 장점, 비용 효율적</td>
+                <td>깊은 병변 효과 제한, 장기 사용 필요, 국소 염증 가능</td>
+            </tr>
+            <tr>
+                <th>면역·표적치료제<br>(Immunotherapy / Targeted, ≈ 3–5%)</th>
+                <td>PD-1 억제제, Hedgehog 억제제 등</td>
+                <td>절제불가·전이성 BCC/SCC, melanoma</td>
+                <td>전신 효과 강력, 생존율 향상, 비수술적 대체 가능</td>
+                <td>고가, 전신 부작용(면역이상•피로 등), 병원 투여 필요</td>
+            </tr>
+            <tr>
+                <th>광역학치료<br>(Photodynamic Therapy, PDT, ≈ 5–8%)</th>
+                <td>광감작제(ALA, MAL) + 특정 파장 LED 조사</td>
+                <td>표재성 BCC, 전암성 병변</td>
+                <td>비침습적, 미용적, 선택적 종양 파괴, 반복 가능</td>
+                <td>깊은 병변 효과 낮음, 치료 중 통증·홍반 가능</td>
+            </tr>
+            <tr>
+                <th>방사선치료<br>(Radiation therapy, ≈ 2–5%)</th>
+                <td>절제 불가 환자, 잔여병변, 고령층</td>
+                <td>수술이 어려운 환자, 재발 병변</td>
+                <td>수술대체 가능, 국소 조절력 우수</td>
+                <td>반복치료 제한, 조직 손상/색소변화 가능, 장기 재발 가능</td>
+            </tr>
+        </tbody>
+    </table>
+
+</body>
+</html>
