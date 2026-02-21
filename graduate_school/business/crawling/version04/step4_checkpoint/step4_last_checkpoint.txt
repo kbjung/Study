@@ -1,0 +1,3 @@
+last_index=9906
+processed_count=9906
+last_url=https://smartstore.naver.com/main/products/12403379129?nl-query=%ED%83%88%EB%AA%A8&nl-au=317465cd6e9f450fa3a9dcd1599b0a83&NaPm=ci%3D317465cd6e9f450fa3a9dcd1599b0a83%7Cct%3Dmfuzo2i0%7Ctr%3Dnslsl%7Csn%3D6592006%7Chk%3D02902f459e4fa650fd073e83cdba50e64e712bdd
