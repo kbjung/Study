@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>탈모 진료비 현황 통계</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Noto Sans KR', sans-serif;
+            background-color: #f8fafc;
+        }
+        .chart-container {
+            position: relative;
+            margin: auto;
+            height: 450px;
+            width: 100%;
+        }
+        .card {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.05);
+        }
+        /* 제목 스타일 */
+        .title-box {
+            display: block;
+            width: 100%;
+            background-color: #f1f5f9;
+            padding: 15px 0;
+            border-radius: 15px;
+            border: 1px solid #e2e8f0;
+            margin-bottom: 2rem;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div class="max-w-5xl mx-auto">
+        <!-- Header -->
+        <header class="text-center">
+            <div class="title-box">
+                <h1 class="text-2xl font-bold text-slate-800">탈모 진료비 현황</h1>
+            </div>
+        </header>
+
+        <!-- Main Stats Card -->
+        <div class="card p-6 mb-4">
+            <div class="flex items-center justify-between mb-8">
+                <div class="ml-2"></div>
+                <div class="flex gap-6 text-sm">
+                    <span class="flex items-center gap-2">
+                        <span class="w-8 h-1 rounded-full bg-blue-500"></span> 
+                        <span class="font-medium text-slate-600">남성</span>
+                    </span>
+                    <span class="flex items-center gap-2">
+                        <span class="w-8 h-1 rounded-full bg-pink-500"></span> 
+                        <span class="font-medium text-slate-600">여성</span>
+                    </span>
+                </div>
+            </div>
+            
+            <div class="chart-container">
+                <canvas id="hairLossChart"></canvas>
+            </div>
+
+            <!-- 출처 표기 (글자 크기 키움) -->
+            <p class="text-right text-sm text-slate-400 mt-6 mr-2 font-medium">
+                ※출처 : 국민건강보험공단, 장종태의원실 재구성
+            </p>
+        </div>
+    </div>
+
+    <script>
+        // 커스텀 플러그인: 점 뒤에 수직선 그리기
+        const verticalLinePlugin = {
+            id: 'verticalLinePlugin',
+            beforeDatasetsDraw: (chart) => {
+                const { ctx, chartArea: { bottom } } = chart;
+                ctx.save();
+                ctx.strokeStyle = '#e2e8f0'; 
+                ctx.lineWidth = 1;
+                ctx.setLineDash([4, 4]); 
+
+                const maleMeta = chart.getDatasetMeta(0);
+                maleMeta.data.forEach((point) => {
+                    ctx.beginPath();
+                    ctx.moveTo(point.x, point.y);
+                    ctx.lineTo(point.x, bottom);
+                    ctx.stroke();
+                });
+                
+                ctx.restore();
+            }
+        };
+
+        Chart.register(ChartDataLabels, verticalLinePlugin);
+
+        const ctx = document.getElementById('hairLossChart').getContext('2d');
+        
+        const years = ['2020년', '2021년', '2022년', '2023년'];
+        const maleData = [21780514, 23229488, 24024286, 24782480];
+        const femaleData = [17105406, 18869398, 19841337, 20067358];
+
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: years,
+                datasets: [
+                    {
+                        label: '남성',
+                        data: maleData,
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.05)',
+                        borderWidth: 4,
+                        pointBackgroundColor: '#fff',
+                        pointBorderColor: '#3b82f6',
+                        pointBorderWidth: 2,
+                        pointRadius: 6,
+                        tension: 0, // 직선으로 변경
+                        fill: false,
+                        datalabels: { color: '#3b82f6' }
+                    },
+                    {
+                        label: '여성',
+                        data: femaleData,
+                        borderColor: '#ec4899',
+                        backgroundColor: 'rgba(236, 72, 153, 0.05)',
+                        borderWidth: 4,
+                        pointBackgroundColor: '#fff',
+                        pointBorderColor: '#ec4899',
+                        pointBorderWidth: 2,
+                        pointRadius: 6,
+                        tension: 0, // 직선으로 변경
+                        fill: false,
+                        datalabels: { color: '#ec4899' }
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                layout: {
+                    padding: {
+                        top: 30,
+                        bottom: 10,
+                        left: 20
+                    }
+                },
+                scales: {
+                    y: {
+                        min: 14000000,
+                        grid: {
+                            display: false,
+                            drawBorder: false
+                        },
+                        ticks: {
+                            display: false
+                        },
+                        title: {
+                            display: true,
+                            text: '진료비 (단위: 백만 원)',
+                            color: '#475569',
+                            font: {
+                                size: 18, // 세로축 제목 크기 확대
+                                weight: 'bold'
+                            },
+                            padding: { bottom: 15 }
+                        }
+                    },
+                    x: {
+                        offset: true,
+                        grid: { display: false },
+                        ticks: {
+                            color: '#64748b',
+                            font: { 
+                                size: 16, // 가로축 틱 글자 크기 확대
+                                weight: 'bold' 
+                            }
+                        }
+                    }
+                },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        enabled: true,
+                        backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                        titleColor: '#1e293b',
+                        bodyColor: '#475569',
+                        borderColor: '#e2e8f0',
+                        borderWidth: 1,
+                        callbacks: {
+                            label: (context) => context.dataset.label + ': ' + context.parsed.y.toLocaleString() + '원'
+                        }
+                    },
+                    datalabels: {
+                        align: 'top',
+                        anchor: 'end',
+                        offset: 8,
+                        font: { weight: 'bold', size: 14 },
+                        formatter: (value) => (value / 1000000).toFixed(1)
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>
