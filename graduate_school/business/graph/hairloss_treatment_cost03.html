@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>탈모 현황 종합 리포트</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Noto Sans KR', sans-serif;
+            background-color: #f8fafc;
+        }
+        .card {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.05);
+        }
+        .title-box {
+            background-color: #f1f5f9;
+            padding: 20px 0; /* 패딩 추가 증가 */
+            border-radius: 15px;
+            border: 1px solid #e2e8f0;
+            margin-bottom: 2rem;
+            text-align: center;
+        }
+        /* 세로 높이 유지 및 가독성 확보 */
+        .chart-container-left {
+            position: relative;
+            height: 750px; 
+            width: 100%;
+        }
+        .chart-container-right {
+            position: relative;
+            height: 350px; /* 높이 소폭 증가 */
+            width: 100%;
+        }
+        
+        .burden-wrapper {
+            position: relative;
+            width: 220px; /* 크기 확대 */
+            height: 220px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .burden-circle-svg {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+        }
+        .burden-center {
+            width: 170px; /* 내부 영역 확대 */
+            height: 170px;
+            background: white;
+            border-radius: 50%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 5;
+            box-shadow: inset 0 2px 10px rgba(0,0,0,0.02);
+            padding: 15px;
+        }
+        
+        .interaction-arrow {
+            font-size: 48px; /* 화살표 크기 확대 */
+            color: #cbd5e1;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 220px;
+        }
+        
+        .highlight-badge {
+            position: absolute;
+            bottom: 10px;
+            right: -20px;
+            background-color: #1e293b;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 16px;
+            font-size: 24px; /* 글자 크기 확대 */
+            font-weight: bold;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            z-index: 10;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div class="w-full mx-auto px-4">
+        <div class="grid grid-cols-1 lg:grid-cols-5 gap-8 items-stretch">
+            
+            <!-- Left Column: 탈모 진료비 현황 -->
+            <div class="lg:col-span-3 flex flex-col">
+                <div class="title-box">
+                    <!-- 제목 한단계 더 키움 (text-4xl) -->
+                    <h1 class="text-4xl font-bold text-slate-800">
+                        탈모 진료비 현황 <span class="text-2xl font-normal ml-2 text-slate-500">(2020-2023)</span>
+                    </h1>
+                </div>
+                
+                <div class="card p-12 flex-grow border border-slate-100 flex flex-col">
+                    <div class="flex items-center justify-between mb-16">
+                        <h2 class="text-3xl font-bold text-slate-700 ml-2">연도별 진료비 (단위: 백만 원)</h2>
+                        <div class="flex gap-12 text-xl">
+                            <span class="flex items-center gap-4">
+                                <span class="w-14 h-2.5 rounded-full bg-blue-500"></span> 
+                                <span class="font-bold text-slate-600">남성</span>
+                            </span>
+                            <span class="flex items-center gap-4">
+                                <span class="w-14 h-2.5 rounded-full bg-pink-500"></span> 
+                                <span class="font-bold text-slate-600">여성</span>
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <div class="chart-container-left flex-grow">
+                        <canvas id="hairLossExpenseChart"></canvas>
+                    </div>
+
+                    <p class="text-right text-lg text-slate-400 mt-12 mr-2 font-medium">
+                        ※ 출처: 국민건강보험공단, 장종태의원실 재구성
+                    </p>
+                </div>
+            </div>
+
+            <!-- Right Column -->
+            <div class="lg:col-span-2 flex flex-col gap-6">
+                
+                <!-- 연령별 환자 비율 -->
+                <div class="flex flex-col">
+                    <div class="title-box">
+                        <h1 class="text-4xl font-bold text-slate-800">
+                            탈모 환자 연령별 비율 <span class="text-2xl font-normal ml-2 text-slate-500">(2024년 기준)</span>
+                        </h1>
+                    </div>
+                    
+                    <div class="card p-12 border border-slate-100">
+                        <div class="grid grid-cols-2 gap-12">
+                            <div class="text-center relative">
+                                <span class="inline-block px-8 py-3 bg-blue-50 text-blue-600 rounded-full text-xl font-black mb-10">남성</span>
+                                <div class="highlight-badge">2030세대(42.0%)</div>
+                                <div class="chart-container-right">
+                                    <canvas id="maleAgePieChart"></canvas>
+                                </div>
+                            </div>
+                            <div class="text-center relative">
+                                <span class="inline-block px-8 py-3 bg-pink-50 text-pink-600 rounded-full text-xl font-black mb-10">여성</span>
+                                <div class="highlight-badge">2030세대(30.1%)</div>
+                                <div class="chart-container-right">
+                                    <canvas id="femaleAgePieChart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                        <p class="text-lg text-slate-400 mt-12 text-right font-medium mr-2">
+                            ※ 출처: 건강보험심사평가원(2024년 기준)
+                        </p>
+                    </div>
+                </div>
+
+                <!-- 탈모의 다차원적 부담 -->
+                <div class="flex flex-col flex-grow">
+                    <div class="title-box">
+                        <h1 class="text-4xl font-bold text-slate-800">탈모의 다차원적 부담</h1>
+                    </div>
+                    
+                    <div class="card p-12 bg-slate-50 flex-grow flex flex-col justify-center border border-slate-200">
+                        <div class="flex items-center justify-around w-full mb-8">
+                            
+                            <!-- 1. 신체적 문제 -->
+                            <div class="flex flex-col items-center">
+                                <div class="burden-wrapper">
+                                    <svg class="burden-circle-svg" viewBox="0 0 100 100">
+                                        <circle cx="50" cy="50" r="46" fill="none" stroke="#dcfce7" stroke-width="2" />
+                                        <circle cx="50" cy="50" r="40" fill="none" stroke="#10b981" stroke-width="12" />
+                                    </svg>
+                                    <div class="burden-center">
+                                        <div class="text-emerald-500 mb-4">
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="w-16 h-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                                            </svg>
+                                        </div>
+                                        <h3 class="text-xl font-bold text-slate-800 text-center leading-tight">신체적 문제</h3>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="interaction-arrow">⇄</div>
+
+                            <!-- 2. 심리•정신적 문제 -->
+                            <div class="flex flex-col items-center">
+                                <div class="burden-wrapper">
+                                    <svg class="burden-circle-svg" viewBox="0 0 100 100">
+                                        <circle cx="50" cy="50" r="46" fill="none" stroke="#e0f2fe" stroke-width="2" />
+                                        <circle cx="50" cy="50" r="40" fill="none" stroke="#0ea5e9" stroke-width="12" />
+                                    </svg>
+                                    <div class="burden-center">
+                                        <div class="text-sky-500 mb-4">
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="w-16 h-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                            </svg>
+                                        </div>
+                                        <h3 class="text-xl font-bold text-slate-800 text-center leading-tight">심리•정신적<br>문제</h3>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="interaction-arrow">⇄</div>
+
+                            <!-- 3. 사회•경제적 활동 위축 -->
+                            <div class="flex flex-col items-center">
+                                <div class="burden-wrapper">
+                                    <svg class="burden-circle-svg" viewBox="0 0 100 100">
+                                        <circle cx="50" cy="50" r="46" fill="none" stroke="#ffe4e6" stroke-width="2" />
+                                        <circle cx="50" cy="50" r="40" fill="none" stroke="#f43f5e" stroke-width="12" />
+                                    </svg>
+                                    <div class="burden-center">
+                                        <div class="text-rose-500 mb-4">
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="w-16 h-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm12 5h-2m-2 0h-2m-2 0H9m-2 0H5m-2 0H1" />
+                                            </svg>
+                                        </div>
+                                        <h3 class="text-xl font-bold text-slate-800 text-center leading-tight">사회•경제적<br>활동 위축</h3>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <p class="text-right text-lg text-slate-400 mt-6 mr-2 font-medium">
+                            ※ 출처: 대한모발학회 및 관련 연구 종합
+                        </p>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <script>
+        Chart.register(ChartDataLabels);
+
+        // 1. 탈모 진료비 현황 (Line Chart)
+        const verticalLinePlugin = {
+            id: 'verticalLinePlugin',
+            beforeDatasetsDraw: (chart) => {
+                if(chart.canvas.id !== 'hairLossExpenseChart') return;
+                const { ctx, chartArea: { bottom } } = chart;
+                ctx.save();
+                ctx.strokeStyle = '#e2e8f0'; 
+                ctx.lineWidth = 1;
+                ctx.setLineDash([4, 4]); 
+
+                const maleMeta = chart.getDatasetMeta(0);
+                maleMeta.data.forEach((point) => {
+                    ctx.beginPath();
+                    ctx.moveTo(point.x, point.y);
+                    ctx.lineTo(point.x, bottom);
+                    ctx.stroke();
+                });
+                ctx.restore();
+            }
+        };
+
+        Chart.register(verticalLinePlugin);
+
+        const expCtx = document.getElementById('hairLossExpenseChart').getContext('2d');
+        const maleExpData = [21780514, 23229488, 24024286, 24782480];
+        const femaleExpData = [17105406, 18869398, 19841337, 20067358];
+
+        new Chart(expCtx, {
+            type: 'line',
+            data: {
+                labels: ['2020년', '2021년', '2022년', '2023년'],
+                datasets: [
+                    {
+                        label: '남성',
+                        data: maleExpData,
+                        borderColor: '#3b82f6',
+                        borderWidth: 7,
+                        pointBackgroundColor: '#fff',
+                        pointBorderColor: '#3b82f6',
+                        pointBorderWidth: 5,
+                        pointRadius: 12,
+                        tension: 0,
+                        datalabels: { color: '#3b82f6', font: { size: 26, weight: 'bold' } }
+                    },
+                    {
+                        label: '여성',
+                        data: femaleExpData,
+                        borderColor: '#ec4899',
+                        borderWidth: 7,
+                        pointBackgroundColor: '#fff',
+                        pointBorderColor: '#ec4899',
+                        pointBorderWidth: 5,
+                        pointRadius: 12,
+                        tension: 0,
+                        datalabels: { color: '#ec4899', font: { size: 26, weight: 'bold' } }
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                layout: { padding: { top: 60, bottom: 30, left: 10, right: 40 } },
+                scales: {
+                    y: {
+                        min: 14000000,
+                        grid: { display: false, drawBorder: false },
+                        ticks: { display: false },
+                        title: {
+                            display: true,
+                            text: '진료비 (단위: 백만 원)',
+                            color: '#475569',
+                            font: { size: 28, weight: 'bold' },
+                            padding: { bottom: 40 }
+                        }
+                    },
+                    x: {
+                        offset: true,
+                        grid: { display: false },
+                        ticks: { color: '#64748b', font: { size: 28, weight: 'bold' } }
+                    }
+                },
+                plugins: {
+                    legend: { display: false },
+                    datalabels: {
+                        align: 'top',
+                        anchor: 'end',
+                        offset: 18,
+                        formatter: (value) => (value / 1000000).toFixed(1)
+                    }
+                }
+            }
+        });
+
+        // 2. 연령별 환자 비율
+        const ageLabels = ['20대', '30대', '40대', '50대', '기타'];
+        const maleAgeData = [24578, 33934, 32813, 23585, 24365];
+        const femaleAgeData = [14501, 17685, 21911, 23328, 29384];
+
+        const commonPieOptions = {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                datalabels: {
+                    display: true,
+                    anchor: 'center',
+                    align: 'center',
+                    color: (context) => context.dataIndex === 4 ? '#475569' : '#fff',
+                    font: { weight: 'bold', size: 24 }, /* 파이 라벨 확대 */
+                    formatter: (value, context) => context.chart.data.labels[context.dataIndex]
+                }
+            }
+        };
+
+        new Chart(document.getElementById('maleAgePieChart').getContext('2d'), {
+            type: 'pie',
+            data: {
+                labels: ageLabels,
+                datasets: [{
+                    data: maleAgeData,
+                    backgroundColor: ['#1d4ed8', '#2563eb', '#3b82f6', '#60a5fa', '#e2e8f0'],
+                    borderWidth: [10, 10, 1, 1, 1],
+                    borderColor: ['#0f172a', '#0f172a', '#fff', '#fff', '#fff'],
+                    borderAlign: 'inner'
+                }]
+            },
+            options: commonPieOptions
+        });
+
+        new Chart(document.getElementById('femaleAgePieChart').getContext('2d'), {
+            type: 'pie',
+            data: {
+                labels: ageLabels,
+                datasets: [{
+                    data: femaleAgeData,
+                    backgroundColor: ['#be185d', '#db2777', '#ec4899', '#f472b6', '#e2e8f0'],
+                    borderWidth: [10, 10, 1, 1, 1],
+                    borderColor: ['#500724', '#500724', '#fff', '#fff', '#fff'],
+                    borderAlign: 'inner'
+                }]
+            },
+            options: commonPieOptions
+        });
+    </script>
+</body>
+</html>
