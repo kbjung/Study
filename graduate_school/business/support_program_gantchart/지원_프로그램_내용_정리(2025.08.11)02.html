@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>창업 지원 프로그램 신청 기간 로드맵</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Noto Sans KR', sans-serif;
+        }
+        .gantt-container {
+            position: relative;
+            width: 100%;
+            overflow-x: auto;
+            padding: 1.5rem;
+            background-color: #f9fafb;
+        }
+        .gantt-chart {
+            position: relative;
+            min-width: 1200px;
+        }
+        .gantt-grid {
+            display: grid;
+            /* grid-template-columns is now set by JavaScript */
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .gantt-header {
+            background-color: #f3f4f6;
+            font-weight: 700;
+            text-align: center;
+            padding: 0.75rem 0.5rem;
+            border-right: 1px solid #e5e7eb;
+            font-size: 0.875rem;
+            position: sticky;
+            top: 0;
+            z-index: 20;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .gantt-header:hover {
+            background-color: #e5e7eb;
+        }
+        .gantt-header.highlighted {
+            background-color: #c7d2fe;
+            color: #312e81;
+        }
+        .gantt-program-name {
+            font-weight: 500;
+            padding: 0.75rem;
+            border-right: 1px solid #e5e7eb;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            background-color: #ffffff;
+            font-size: 0.875rem;
+            position: sticky;
+            left: 0;
+            z-index: 10;
+        }
+        .gantt-row {
+            position: relative;
+            height: 48px;
+        }
+        .gantt-bar-container {
+            grid-column: 2 / span 12;
+            position: relative;
+            display: flex;
+            align-items: center;
+            padding: 0.25rem 0;
+        }
+        .gantt-bar {
+            position: absolute;
+            height: 28px;
+            border-radius: 0.375rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 0.75rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease-in-out;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+            white-space: nowrap;
+        }
+        .gantt-bar.dimmed {
+            opacity: 0.2;
+            filter: grayscale(80%);
+        }
+        .gantt-bar:hover {
+            transform: scale(1.02);
+            opacity: 0.95;
+        }
+        .excluded-program {
+            background-image: repeating-linear-gradient(
+                45deg,
+                rgba(255, 255, 255, 0.2),
+                rgba(255, 255, 255, 0.2) 10px,
+                transparent 10px,
+                transparent 20px
+            );
+        }
+        .gantt-grid-bg {
+            position: absolute;
+            top: 0;
+            left: 250px; /* Start after the program name column */
+            right: 0;
+            bottom: 0;
+            display: grid;
+            z-index: 1;
+            pointer-events: none;
+        }
+        .month-bg {
+            grid-row: 1 / -1; /* Span all rows including header */
+            transition: background-color 0.3s ease-in-out;
+            border-right: 1px solid #e5e7eb;
+        }
+        .month-bg.highlighted {
+            background-color: rgba(67, 56, 202, 0.07);
+        }
+        /* Modal styles */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.6);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 50;
+        }
+        .modal-content {
+            background-color: white;
+            border-radius: 0.75rem;
+            width: 90%;
+            max-width: 650px;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+        }
+        .modal-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .modal-body {
+            padding: 1.5rem;
+            line-height: 1.7;
+        }
+        .modal-body strong {
+            color: #1f2937;
+            min-width: 90px;
+            display: inline-block;
+        }
+        .modal-body a {
+            color: #4f46e5;
+            text-decoration: underline;
+            font-weight: 500;
+        }
+        .modal-body a:hover {
+            color: #312e81;
+        }
+        .category-header {
+            grid-column: 1 / -1;
+            background-color: #e5e7eb;
+            font-weight: 700;
+            padding: 0.5rem 1rem;
+            font-size: 1rem;
+            color: #111827;
+            border-top: 2px solid #d1d5db;
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+
+    <div class="container mx-auto p-4 md:p-8">
+        <div class="bg-white rounded-xl shadow-lg">
+            <div class="p-6 border-b border-gray-200">
+                <h1 class="text-2xl md:text-3xl font-bold text-gray-800">창업 지원 프로그램 신청 기간 로드맵 (2025년)</h1>
+                <p class="mt-2 text-gray-600">상단의 월을 클릭하여 필터링하고, 프로그램 막대를 클릭하여 상세 정보를 확인하세요.</p>
+            </div>
+            <div id="gantt-main-container" class="gantt-container">
+                <div id="gantt-chart" class="gantt-chart">
+                    <div id="gantt-grid-bg" class="gantt-grid-bg"></div>
+                    <!-- Gantt Chart Header -->
+                    <div id="gantt-header-row" class="gantt-grid sticky top-0 z-20">
+                        <div class="gantt-header" style="cursor:default; position:sticky; left:0; z-index:21;">프로그램명</div>
+                        <!-- Month headers will be injected here -->
+                    </div>
+                    <!-- Gantt Chart Body will be injected here by JavaScript -->
+                </div>
+            </div>
+             <div class="p-4 bg-gray-50 rounded-b-xl text-sm text-gray-500">
+                * 각 막대는 프로그램의 <strong>신청 기간</strong>을 나타냅니다. 빗금 막대는 '제외 프로그램' 목록 사업입니다.
+             </div>
+        </div>
+    </div>
+
+    <!-- Modal -->
+    <div id="program-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="flex justify-between items-start">
+                    <div>
+                        <h2 id="modal-title" class="text-2xl font-bold text-gray-800"></h2>
+                        <div id="modal-excluded-notice" class="hidden mt-2 px-3 py-1 bg-yellow-100 text-yellow-800 text-sm font-semibold rounded-full"></div>
+                    </div>
+                    <button id="close-modal-btn" class="text-gray-400 hover:text-gray-600 text-3xl leading-none">&times;</button>
+                </div>
+            </div>
+            <div id="modal-body" class="modal-body text-gray-700">
+                <!-- Detailed info will be injected here -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const programLinks = {
+            "예비창업패키지": [
+                { name: "중기부 공고", url: "https://www.mss.go.kr/site/smba/ex/bbs/View.do?bcIdx=1056700&cbIdx=310&parentSeq=1056700" },
+                { name: "대구창업허브 안내", url: "https://w-startup.daegu.go.kr/business/173" },
+                { name: "기업마당", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000104904" }
+            ],
+            "초기창업패키지": [
+                { name: "기업마당 공고", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000104905" },
+                { name: "중기부 공고", url: "https://www.mss.go.kr/site/smba/ex/bbs/View.do?bcIdx=1056704&cbIdx=310" }
+            ],
+            "창업도약패키지": [
+                { name: "중기부 공고", url: "https://www.mss.go.kr/site/smba/ex/bbs/View.do?bcIdx=1056804&cbIdx=310&parentSeq=1056804" },
+                { name: "기업마당 공고", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000105117" }
+            ],
+            "창업중심대학 (청년 예비형)": [
+                { name: "기업마당 공고", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000106139" },
+                { name: "중기부 공고", url: "https://www.mss.go.kr/site/smba/ex/bbs/View.do?bcIdx=1057321&cbIdx=310&parentSeq=1057321" },
+                { name: "KISED 안내", url: "https://www.kised.or.kr/menu.es?mid=a10205150000" }
+            ],
+            "청년창업사관학교": [
+                { name: "중기부 공고", url: "https://www.mss.go.kr/site/smba/ex/bbs/View.do?bcIdx=1056086&cbIdx=310&parentSeq=1056086" },
+                { name: "기업마당 공고", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000104047" }
+            ],
+            "재도전성공패키지": [
+                { name: "중기부 공고", url: "https://www.mss.go.kr/site/smba/ex/bbs/View.do?bcIdx=1056547&cbIdx=310&parentSeq=1056547" },
+                { name: "기업마당 공고", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000104705" }
+            ],
+            "Pre-TIPS": [{ name: "기업마당 공고", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000108974" }],
+            "TIPS": [
+                { name: "TIPS 안내", url: "https://www.jointips.or.kr/bbs/board.php?bo_table=contents&wr_id=770" },
+                { name: "기업마당 공고", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000107568" }
+            ],
+            "초격차 스타트업 1000+": [
+                { name: "기업마당 공고", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000104228" },
+                { name: "KISED 안내", url: "https://www.kised.or.kr/menu.es?mid=a10205180000" }
+            ],
+            "창업성장기술개발(디딤돌)": [
+                { name: "중기부 공고", url: "https://www.mss.go.kr/site/smba/ex/bbs/View.do?bcIdx=1057749&cbIdx=310" },
+                { name: "TIPA", url: "https://www.tipa.or.kr/s040101/view/id/16130" }
+            ],
+            "중소기업기술혁신개발": [
+                { name: "중기부 공고", url: "https://www.mss.go.kr/site/smba/ex/bbs/View.do?bcIdx=1058598&cbIdx=310&parentSeq=1058598" },
+                { name: "IRIS 공고", url: "https://www.iris.go.kr/contents/retrieveBsnsAncmView.do?ancmId=008615" }
+            ],
+            "국가신약개발사업": [
+                { name: "IRIS 1차", url: "https://www.iris.go.kr/contents/retrieveBsnsAncmView.do?ancmId=013277" },
+                { name: "IRIS 2차", url: "https://www.iris.go.kr/contents/retrieveBsnsAncmView.do?ancmId=013474" },
+                { name: "KDDF", url: "https://kddf.org/ko/board/notice/view?bc_no=2488" }
+            ],
+            "바이오 스타트업 액셀러레이팅": [
+                { name: "기업마당 공고", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000110354" },
+                { name: "인천TP 공지", url: "https://itp.or.kr/intro.asp?seq=9642&tmid=13" }
+            ],
+            "KRIBB K-바이오 스타트업 부스터": [
+                { name: "KRIBB 공고", url: "https://www.kribb.re.kr/kor/sub03/sub03_01_03_view.jsp?b_idx=34315" },
+                { name: "NST 안내", url: "https://www.nst.re.kr/www/selectBbsNttView.do?bbsNo=17&key=59&nttNo=45620" },
+                { name: "TBIC 안내", url: "https://tbic.kaist.ac.kr/boards/view/notice/4710/120/" }
+            ],
+            "도전! K-스타트업": [
+                { name: "과기정통부 공고", url: "https://www.msit.go.kr/bbs/view.do?bbsSeqNo=96&mId=310&mPid=121&nttSeqNo=3180213&sCode=user" },
+                { name: "기업마당 공고", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000106618" }
+            ],
+            "GG 바이오허브 창업경진대회": [{ name: "기업마당 공고", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000107883" }],
+            "서울-BMS 이노베이션 스퀘어 챌린지": [
+                { name: "서울바이오허브 안내", url: "https://www.seoulbiohub.kr/front/supportManageReq/supportManageView.do?LISTOP=&gubun=03&seq=683" },
+                { name: "기업마당 공고", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000109856" }
+            ],
+            "서울뷰티위크 피칭대회": [{ name: "기업마당 공고", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000104483" }],
+            "바이오아이코어": [
+                { name: "기업마당 공고", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000110275" },
+                { name: "사업단 홈페이지", url: "https://bioicorps.or.kr/" }
+            ],
+            "서울바이오허브-셀트리온 OI": [
+                { name: "서울바이오허브 안내", url: "https://www.seoulbiohub.kr/front/supportManageReq/supportManageView.do?LISTOP=&gubun=03&seq=683" },
+                { name: "기업마당 공고", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000109856" }
+            ],
+            "서울바이오허브-로토제약 OI": [
+                { name: "서울바이오허브 안내", url: "https://www.seoulbiohub.kr/front/supportManageReq/supportManageView.do?gubun=12&seq=688" },
+                { name: "기업마당 공고", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000112425" }
+            ],
+            "광교 바이오허브 랩 스테이션": [
+                { name: "경기도 공고", url: "https://gnews.gg.go.kr/briefing/brief_gongbo_view.do?BS_CODE=S017&number=66409" },
+                { name: "G-PMS 공고", url: "https://pms.gbsa.or.kr/info/pblanc/pblancDetail.do?anncNo=20250027&schDetailAnnc=1" }
+            ],
+            "K-바이오랩허브 (입주)": [
+                { name: "멤버십 공고", url: "https://www.tipa.or.kr/kbiolabhub/notice/view/id/123" },
+                { name: "입주 공고문", url: "https://www.tipa.or.kr/s040101/file_down/id/19187" },
+                { name: "IFEZ 안내", url: "https://www.ifez.go.kr/main/pst/view.do?pst_id=noti01&pst_sn=667593" }
+            ],
+            "에코스타트업": [{ name: "기업마당 공고", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000103394" }],
+            "K-Startup Center(KSC)": [{ name: "기업마당 공고", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000107544" }],
+            "K-Global 액셀러레이팅": [
+                { name: "NIPA 안내", url: "https://www.nipa.kr/home/2-2/15878" },
+                { name: "기업마당 공고", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000109188" },
+                { name: "K-Global 안내", url: "https://www.k-global.kr/support/supportView.do?board_idx=241&idx=241" }
+            ],
+            "아기유니콘": [{ name: "중기부 공고", url: "https://www.mss.go.kr/site/smba/ex/bbs/View.do?bcIdx=1056084&cbIdx=310&parentSeq=1056084" }],
+            "민관협력 오픈이노베이션": [{ name: "중기부 공고", url: "https://www.mss.go.kr/site/smba/ex/bbs/View.do?bcIdx=1057802&cbIdx=310&parentSeq=1057802" }],
+            "수출바우처": [
+                { name: "수출바우처 포털", url: "https://www.exportvoucher.com/portal/bizinfo/voucher_01" },
+                { name: "중기부 공고", url: "https://www.mss.go.kr/common/board/Download.do?bcIdx=1057993&cbIdx=310&streFileNm=6eab3de8-9396-4bf4-98c5-1bd3fbc0a1b2.pdf" }
+            ],
+            "해외규격인증획득지원": [
+                { name: "중기부 공고", url: "https://www.mss.go.kr/site/smba/ex/bbs/View.do?bcIdx=1060650&cbIdx=310&parentSeq=1060650" },
+                { name: "KTR 안내", url: "https://reach.ktr.or.kr/iframe/selectBbsNttView.do?bbsNo=33&integrDeptCode=&key=47&nttNo=3769" }
+            ],
+            "K-AI 신약개발": [
+                { name: "보건복지부 공고", url: "https://www.mohw.go.kr/board.es?act=view&bid=0003&list_no=1487134&mid=a10501010200" },
+                { name: "기업마당 공고", url: "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/view.do?pblancId=PBLN_000000000113431" }
+            ]
+        };
+
+        const programData = [
+            // 아이디어 / 예비 창업
+            { category: "아이디어 / 예비 창업", color: "bg-teal-500", programs: [
+                { name: "예비창업패키지", start: "2025-02-24", end: "2025-03-12", desc: "예비창업자의 기술/BM 사업화를 지원하는 중기부 대표 사업.", eligibility: "공고일 기준 '예비창업자'(사업자등록·법인등기 없음)", supportItems: "사업화자금(평균 5천만 원), 교육·멘토링·네트워킹", supportDuration: "통상 8~10개월", bioParticipation: "가능(분야 제한 없음)", notes: "2025년부터 사업화 자금 차등 지원 방식 도입" },
+                { name: "창업중심대학 (청년 예비형)", start: "2025-03-21", end: "2025-04-02", desc: "권역 대학 인프라를 통해 예비~도약기까지 단계별 지원", eligibility: "만 29세 이하 '생애 최초' 예비창업자", supportItems: "평균 4,700만 원(최대 1억) 등 대학별 프로그램", supportDuration: "대학별 상이", bioParticipation: "대학 특화·지역주력산업에 바이오 포함 시 가능", notes: "동일 아이템으로 복수 대학 신청 불가" },
+                { name: "재도전성공패키지", start: "2025-02-12", end: "2025-03-06", desc: "폐업 이력 보유 (예비)재창업자·재창업기업 대상 패키지 지원", eligibility: "예비재창업자 또는 재창업 7년 이내 기업", supportItems: "사업화자금 평균 0.7억(최대 1억), 재창업 교육·멘토링·투자연계", supportDuration: "협약 후 7개월 이내", bioParticipation: "가능(분야 제한 없음)", notes: "IP전략형 등 세부 트랙 존재" },
+            ]},
+            // 초기 창업 (창업 ~3년)
+            { category: "초기 창업 (창업 ~3년)", color: "bg-sky-500", programs: [
+                { name: "초기창업패키지", start: "2025-02-24", end: "2025-03-11", desc: "창업 3년 이내 초기기업의 안정화·성장 지원", eligibility: "창업 3년 이내 기업", supportItems: "사업화 자금 최대 1억(평균 0.7억), 시장진입·투자연계 등", supportDuration: "약 10개월 내외", bioParticipation: "가능", notes: "공고 연도·지자체 사업과의 중복 규정은 공고문 확인 권장" },
+                { name: "청년창업사관학교", start: "2025-01-23", end: "2025-02-12", desc: "만 39세 이하 창업 3년 이내 대상의 집중 보육", eligibility: "만 39세 이하, 창업 3년 이내 (예비창업자도 가능)", supportItems: "사업화자금(최대 ~1억), 공간·장비, 전담 코칭, IR 등", supportDuration: "1년 (협약 10~11개월)", bioParticipation: "일부 지역(인천·충북 등) 바이오 중점 모집", notes: "협약 전 사업자등록 필요" },
+                { name: "Pre-TIPS", start: "2025-05-08", end: "2025-12-31", isUncertain: true, desc: "TIPS 진입 전 민간투자 연계형 사업화", eligibility: "예비창업팀 또는 창업 3년 이내 (투자유치·추천 필요)", supportItems: "사업화자금 최대 1억 + 멘토링·IR", supportDuration: "10~12개월", bioParticipation: "가능", notes: "차수별 모집/마감 상이" },
+            ]},
+            // 도약 / 성장 (창업 3~7년)
+            { category: "도약 / 성장 (창업 3~7년)", color: "bg-indigo-500", programs: [
+                { name: "창업도약패키지", start: "2025-02-20", end: "2025-03-13", desc: "도약기(창업 3~7년) 기업 스케일업 지원", eligibility: "창업 3년 초과~7년 이내", supportItems: "일반형 최대 3억(평균 1.3억), 협업형 최대 2억 등", supportDuration: "약 1년 내외", bioParticipation: "가능", notes: "초기/재도전/창업중심대학 등 이수기업 패스트트랙" },
+                { name: "TIPS", start: "2025-04-09", end: "2025-12-31", isUncertain: true, desc: "운영사 투자·추천 기반, 정부 R&D/사업화/해외마케팅 매칭", eligibility: "창업 7년 이내, 운영사 선투자(1~3억↑) 필수", supportItems: "R&D 5~15억, 사업화 1억, 해외마케팅 1억 등", supportDuration: "R&D 2~3년, 비R&D 약 10개월", bioParticipation: "운영사 강점 분야에 '바이오' 포함 시 유리", notes: "3책5공 적용" },
+            ]},
+            // 스케일업 / 확장
+            { category: "스케일업 / 확장", color: "bg-violet-600", programs: [
+                { name: "초격차 스타트업 1000+", start: "2025-01-23", end: "2025-02-20", desc: "딥테크 10대 분야 스케일업(최장 3년)", eligibility: "10대 초격차 분야, 업력 ≤10년", supportItems: "연 최대 2억(총 최대 6억), 기술/협업/투자 프로그램, R&D·보증·수출 연계", supportDuration: "최대 3년", bioParticipation: "가능 (바이오·헬스 포함)", notes: "2차 모집(6-7월) 가능성 있음" },
+                { name: "창업성장기술개발(디딤돌)", start: "2025-04-17", end: "2025-05-30", desc: "창업기업 대상 전략적 R&D", eligibility: "업력 7년 이하, 매출 20억 미만, 중기부 R&D 첫 수행", supportItems: "정부 부담 75% 이내, 최대 2억/1.5년", supportDuration: "최대 1년~1.5년", bioParticipation: "가능(신산업·바이오 R&D 포함)", notes: "1차(4-5월), 2차(5월) 기간 통합 표시, 3책5공 적용" },
+                { name: "중소기업기술혁신개발", start: "2025-02-03", end: "2025-05-21", desc: "수요·글로벌 협력 기반 R&D로 시장진입 가속", eligibility: "(기본) 매출 20억 이상 기업, 일부 유형 예외", supportItems: "유형별 최대 6~20억 등", supportDuration: "과제별 1~2년", bioParticipation: "가능(국가전략기술 수요 확정 과제)", notes: "상(2월)/하(5월)반기 기간 통합 표시, 3책5공 적용" },
+                { name: "국가신약개발사업", start: "2025-01-01", end: "2025-06-30", isUncertain: true, desc: "신약개발 전주기(유효물질~임상2상) R&D 대형사업", eligibility: "대학, 의료기관, 연구기관, 기업(기업부설연구소 보유)", supportItems: "분야 트랙별 상이 (유효물질 12억 ~ 임상2상 91억)", supportDuration: "과제별 상이", bioParticipation: "직접 대상", notes: "1월, 6월 공고 기간 통합 표시" },
+            ]},
+            // 글로벌 / 기타 지원
+            { category: "글로벌 / 기타 지원", color: "bg-amber-500", programs: [
+                { name: "에코스타트업", start: "2025-01-20", end: "2025-02-05", isExcluded: true, desc: "녹색산업(기후·환경) 예비~성장기업 사업화 지원", eligibility: "녹색산업 분야 예비·창업·성장 기업", supportItems: "트랙별 6천만~2.5억, 교육·멘토링 등", supportDuration: "약 6~9개월", bioParticipation: "제한적 (환경문제 해결형 바이오)", notes: "일반 바이오헬스는 비해당 가능성 높음" },
+                { name: "아기유니콘", start: "2025-01-24", end: "2025-02-14", isExcluded: true, desc: "유망 혁신기업을 예비유니콘으로 육성하는 패키지 지원", eligibility: "공고문 기준 충족 기업(매출·고용·투자 등)", supportItems: "성장 단계별 패키지 지원", supportDuration: "협약 연차에 따름", bioParticipation: "가능", notes: "세부 내용은 해당 연도 공고 참조" },
+                { name: "민관협력 오픈이노베이션", start: "2025-04-03", end: "2025-04-24", isExcluded: true, desc: "중견·대기업 수요와 스타트업 기술을 매칭하여 협업 과제 지원", eligibility: "공고 유형별 요건 충족", supportItems: "수요기업-스타트업 협업과제 수행", supportDuration: "과제·라운드별 상이", bioParticipation: "가능(수요기업 과제에 따라)", notes: "" },
+                { name: "K-Startup Center(KSC)", start: "2025-04-08", end: "2025-04-30", isExcluded: true, desc: "해외 거점 활용 현지 보육, 시장검증, 네트워킹 및 자금 지원", eligibility: "업력 7년 이내, 투자유치 또는 해외실적 보유", supportItems: "현지 액셀러레이팅, 사무공간, 자금(약 4천만원)", supportDuration: "거점·트랙별 상이(통상 수개월)", bioParticipation: "가능", notes: "" },
+                { name: "K-Global 액셀러레이팅", start: "2025-05-12", end: "2025-05-28", isExcluded: true, isUncertain: true, desc: "AI·AX 등 ICT 스타트업의 글로벌 스케일업 지원", eligibility: "글로벌 진출 목표 AI·AX 분야 ICT 창업기업", supportItems: "역량진단, 멘토링, 네트워킹, 해외IR 등", supportDuration: "프로그램별 상이(수개월)", bioParticipation: "ICT·AI 융합 바이오로 참여 가능", notes: "수행기관별 신청 기간 상이함" },
+                { name: "해외규격인증획득지원", start: "2025-08-01", end: "2025-08-29", isExcluded: true, desc: "해외시장 진출에 필요한 인증 획득 비용 지원", eligibility: "직전년도 직접수출액 5천만불 미만 중소기업", supportItems: "인증·시험·컨설팅 비용 50~70% 지원(최대 1억)", supportDuration: "협약 후 1년", bioParticipation: "가능(의료기기·제약 등)", notes: "일반 2차 예시 기간" },
+                { name: "K-AI 신약개발", start: "2025-08-06", end: "2025-09-04", isExcluded: true, desc: "AI 기반 전임상·임상 모델 개발 R&D 지원", eligibility: "RFP별 지원자격 상이", supportItems: "RFP별 예산에 따름", supportDuration: "연차과제", bioParticipation: "직접 대상(신약 R&D)", notes: "일부 공고는 공공연구기관 대상" },
+                { name: "수출바우처", start: "2025-01-01", end: "2025-12-31", isExcluded: true, isUncertain: true, desc: "수출지원 서비스를 바우처로 선택 사용하는 사업", eligibility: "사업 유형별 선정기업(중소·중견)", supportItems: "바우처 예산 내 서비스 구매", supportDuration: "6-12개월", bioParticipation: "가능", notes: "연중 다회 모집" },
+            ]},
+            // 경진대회 / 입주 / 보육
+            { category: "경진대회 / 입주 / 보육", color: "bg-slate-500", programs: [
+                { name: "도전! K-스타트업", start: "2025-04-01", end: "2025-04-29", desc: "부처 합동 전국 규모 창업경진대회", eligibility: "예비창업자 또는 창업 3년 이내", supportItems: "상금·상장, 후속지원", supportDuration: "대회 운영 일정", bioParticipation: "가능", notes: "" },
+                { name: "GG 바이오허브 창업경진대회", start: "2025-04-14", end: "2025-05-09", desc: "바이오 스타트업/예비창업자 발굴 경진대회", eligibility: "예비창업자 또는 창업 3년 이내", supportItems: "시상·포상, 입주권 가산점 등", supportDuration: "대회 운영 일정", bioParticipation: "직접 대상", notes: "" },
+                { name: "서울-BMS 이노베이션 스퀘어 챌린지", start: "2025-06-03", end: "2025-08-18", desc: "BMS와 함께 바이오헬스케어 혁신 과제를 발굴하는 챌린지", eligibility: "예비창업자 및 창업 ≤10년 바이오헬스케어 팀/기업", supportItems: "PoC/협업 검토, 액셀러레이팅 등", supportDuration: "프로그램별 수개월", bioParticipation: "직접 대상", notes: "" },
+                { name: "서울뷰티위크 피칭대회", start: "2025-05-26", end: "2025-06-27", desc: "뷰티 관련 예비/초기기업 발굴 및 네트워킹", eligibility: "예비창업자 및 창업 7년 이내", supportItems: "시상금, 비즈니스 밋업 기회", supportDuration: "행사/대회 일정", bioParticipation: "직접 대상(화장품/뷰티)", notes: "" },
+                { name: "바이오아이코어", start: "2025-02-07", end: "2025-03-10", desc: "바이오 연구성과 사업화 예비/초기 창업팀 육성", eligibility: "예비창업자 또는 바이오 창업 ≤7년", supportItems: "성장스쿨·투자스쿨, 글로벌 트랙", supportDuration: "과정별 수개월", bioParticipation: "직접 대상", notes: "" },
+                { name: "KRIBB K-바이오 스타트업 부스터", start: "2025-03-10", end: "2025-04-04", desc: "생명공학연구원 주관 바이오 예비·초기 창업팀 액셀러레이팅", eligibility: "예비 또는 창업 7년 미만", supportItems: "비즈니스·IP·인허가 전략, 멘토링 등", supportDuration: "선정 후 연말까지", bioParticipation: "직접 대상", notes: "" },
+                { name: "서울바이오허브-셀트리온 OI", start: "2025-05-26", end: "2025-06-30", desc: "셀트리온 수요기술 기반 오픈이노베이션 과제 발굴 및 협업 지원", eligibility: "창업 ≤8년 바이오·의료 스타트업", supportItems: "PoC/공동검증, 액셀러레이팅, 투자·사업화 연계", supportDuration: "프로그램별 수개월", bioParticipation: "직접 대상", notes: "" },
+                { name: "서울바이오허브-로토제약 OI", start: "2025-07-21", end: "2025-08-11", desc: "로토제약과의 바이오/헬스케어 협업 과제 발굴·검증", eligibility: "창업 ≤8년 바이오·의료 스타트업", supportItems: "공동 R&D/PoC, 멘토링, 해외연계 지원", supportDuration: "프로그램별 수개월", bioParticipation: "직접 대상", notes: "" },
+                { name: "광교 바이오허브 랩 스테이션", start: "2025-06-24", end: "2025-07-29", desc: "경기바이오센터 내 개방형 창업(GBS-Lab) 입주·보육", eligibility: "전국 예비창업자 또는 창업 7년 미만", supportItems: "Wet/Dry Lab 입주공간, 공용장비, 컨설팅 등", supportDuration: "공고 연도 운영계획에 따름", bioParticipation: "직접 대상", notes: "" },
+                { name: "K-바이오랩허브 (입주)", start: "2025-02-14", end: "2025-03-05", desc: "의약바이오 혁신 스타트업 입주/멤버십 선발", eligibility: "기업 대상 멤버십·입주 선발", supportItems: "공간·장비·네트워킹·오픈이노베이션 연계", supportDuration: "공고 연도 운영계획에 따름", bioParticipation: "직접 대상", notes: "멤버십은 별도 모집(예: 5-6월)" },
+            ]},
+        ];
+        
+        // --- Gantt Chart Rendering & Filtering Logic ---
+        const ganttChart = document.getElementById('gantt-chart');
+        const ganttHeaderRow = document.getElementById('gantt-header-row');
+        const ganttGridBg = document.getElementById('gantt-grid-bg');
+        const ganttMainContainer = document.getElementById('gantt-main-container');
+        
+        const year = 2025;
+        let currentProgram = null;
+        let selectedMonth = null;
+
+        // Create Month Headers & Backgrounds
+        const monthDays = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        const totalDays = monthDays.reduce((a, b) => a + b, 0);
+        
+        let gridTemplateColumns = '250px ';
+        let monthOnlyGridColumns = '';
+        monthDays.forEach(days => {
+            const fr = days / totalDays;
+            gridTemplateColumns += `minmax(0, ${fr}fr) `;
+            monthOnlyGridColumns += `minmax(0, ${fr}fr) `;
+        });
+        
+        ganttHeaderRow.style.gridTemplateColumns = gridTemplateColumns;
+        ganttGridBg.style.gridTemplateColumns = monthOnlyGridColumns;
+
+        for (let i = 0; i < 12; i++) {
+            const monthHeader = document.createElement('div');
+            monthHeader.className = 'gantt-header';
+            monthHeader.textContent = `${i + 1}월`;
+            monthHeader.dataset.month = i;
+            ganttHeaderRow.appendChild(monthHeader);
+
+            const monthBg = document.createElement('div');
+            monthBg.className = 'month-bg';
+            monthBg.dataset.monthBg = i;
+            ganttGridBg.appendChild(monthBg);
+        }
+
+        function getDayOfYear(date) {
+            const start = new Date(date.getFullYear(), 0, 0);
+            const diff = date - start;
+            const oneDay = 1000 * 60 * 60 * 24;
+            return Math.floor(diff / oneDay);
+        }
+
+        programData.forEach((category, catIndex) => {
+            const categoryHeader = document.createElement('div');
+            categoryHeader.className = 'category-header';
+            categoryHeader.style.gridTemplateColumns = gridTemplateColumns;
+            categoryHeader.textContent = category.category;
+            ganttChart.appendChild(categoryHeader);
+
+            category.programs.forEach((program, progIndex) => {
+                program.sourceUrls = programLinks[program.name] || [];
+                const startDate = new Date(program.start);
+                const endDate = new Date(program.end);
+                const startDay = getDayOfYear(startDate);
+                const endDay = getDayOfYear(endDate);
+                const left = ((startDay - 1) / totalDays) * 100;
+                const width = ((endDay - startDay + 1) / totalDays) * 100;
+
+                const row = document.createElement('div');
+                row.className = 'gantt-grid gantt-row';
+                row.style.gridTemplateColumns = gridTemplateColumns;
+                row.dataset.catIndex = catIndex;
+                row.dataset.progIndex = progIndex;
+
+                const programNameDiv = document.createElement('div');
+                programNameDiv.className = 'gantt-program-name';
+                programNameDiv.textContent = program.name;
+                
+                const barContainer = document.createElement('div');
+                barContainer.className = 'gantt-bar-container';
+
+                const bar = document.createElement('div');
+                bar.className = `gantt-bar ${category.color}`;
+                if (program.isExcluded) bar.classList.add('excluded-program');
+                bar.style.left = `${left}%`;
+                bar.style.width = `${width}%`;
+                
+                let barText = `<span class="px-2 truncate">${program.name}`;
+                if (program.isUncertain) barText += ` (수시/확인필요)`;
+                barText += `</span>`;
+                bar.innerHTML = barText;
+
+                bar.addEventListener('click', () => openModal(program));
+
+                barContainer.appendChild(bar);
+                row.appendChild(programNameDiv);
+                row.appendChild(barContainer);
+                ganttChart.appendChild(row);
+            });
+        });
+        
+        function resetFilter() {
+            selectedMonth = null;
+            document.querySelectorAll('.month-bg').forEach(bg => bg.classList.remove('highlighted'));
+            document.querySelectorAll('.gantt-bar').forEach(b => b.classList.remove('dimmed'));
+            document.querySelectorAll('.gantt-header').forEach(h => h.classList.remove('highlighted'));
+        }
+
+        ganttHeaderRow.addEventListener('click', (e) => {
+            if (e.target.dataset.month) {
+                const monthIndex = parseInt(e.target.dataset.month, 10);
+
+                if (selectedMonth === monthIndex) {
+                    resetFilter();
+                    return;
+                }
+                
+                resetFilter();
+                selectedMonth = monthIndex;
+
+                e.target.classList.add('highlighted');
+                document.querySelector(`.month-bg[data-month-bg="${monthIndex}"]`).classList.add('highlighted');
+
+                const monthStart = new Date(year, monthIndex, 1);
+                const monthEnd = new Date(year, monthIndex + 1, 0);
+
+                document.querySelectorAll('.gantt-row').forEach(row => {
+                    if (!row.dataset.catIndex) return;
+                    const program = programData[row.dataset.catIndex].programs[row.dataset.progIndex];
+                    const programStart = new Date(program.start);
+                    const programEnd = new Date(program.end);
+                    const overlaps = (programStart <= monthEnd) && (programEnd >= monthStart);
+                    if (!overlaps) {
+                        row.querySelector('.gantt-bar').classList.add('dimmed');
+                    }
+                });
+            }
+        });
+        
+        ganttMainContainer.addEventListener('click', (e) => {
+            if (e.target === ganttMainContainer) {
+                resetFilter();
+            }
+        });
+
+
+        // --- Modal Logic ---
+        const modal = document.getElementById('program-modal');
+        const closeModalBtn = document.getElementById('close-modal-btn');
+        const modalBody = document.getElementById('modal-body');
+        const modalExcludedNotice = document.getElementById('modal-excluded-notice');
+
+        function formatDate(dateStr) {
+            return dateStr.replace(/-/g, '.');
+        }
+
+        function openModal(program) {
+            resetFilter();
+            currentProgram = program;
+            document.getElementById('modal-title').textContent = program.name;
+            
+            if(program.isExcluded) {
+                modalExcludedNotice.textContent = "※ '제외 프로그램' 목록 포함 사업";
+                modalExcludedNotice.classList.remove('hidden');
+            } else {
+                modalExcludedNotice.classList.add('hidden');
+            }
+            
+            let sourceLinksHtml = '정보 없음';
+            if (program.sourceUrls && program.sourceUrls.length > 0) {
+                sourceLinksHtml = program.sourceUrls.map(link => {
+                    return `<a href="${link.url}" target="_blank" rel="noopener noreferrer">${link.name}</a>`;
+                }).join(', ');
+            }
+            
+            const formattedStart = formatDate(program.start);
+            const formattedEnd = formatDate(program.end);
+
+            let detailsHtml = `
+                <p><strong>신청 기간</strong>: ${formattedStart} - ${formattedEnd} ${program.isUncertain ? '<span class="text-red-500 font-semibold">(수시/확인필요)</span>' : ''}</p>
+                <p><strong>간단 설명</strong>: ${program.desc || '정보 없음'}</p>
+                <p><strong>지원 요건</strong>: ${program.eligibility || '정보 없음'}</p>
+                <p><strong>지원 항목</strong>: ${program.supportItems || '정보 없음'}</p>
+                <p><strong>지원 기간</strong>: ${program.supportDuration || '정보 없음'}</p>
+                <p><strong>바이오 참여</strong>: ${program.bioParticipation || '정보 없음'}</p>
+                <p><strong>출처</strong>: ${sourceLinksHtml}</p>
+                <p><strong>특이 사항</strong>: ${program.notes || '없음'}</p>
+            `;
+            modalBody.innerHTML = detailsHtml;
+            modal.classList.remove('hidden');
+        }
+
+        function closeModal() {
+            modal.classList.add('hidden');
+            currentProgram = null;
+        }
+
+        closeModalBtn.addEventListener('click', closeModal);
+        modal.addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal-overlay')) closeModal();
+        });
+
+    </script>
+</body>
+</html>
