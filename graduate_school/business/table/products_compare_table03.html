@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>제품 비교표 (다크모드)</title>
+    <style>
+        /* 기본 배경 및 폰트 설정 */
+        body {
+            background-color: #121212; /* 완전한 검은색보다 살짝 밝은 다크 그레이 */
+            color: #e0e0e0; /* 기본 텍스트 색상 (밝은 회색) */
+            font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
+            padding: 30px;
+        }
+
+        /* 표 전체 스타일 */
+        table {
+            width: 100%;
+            border-collapse: collapse; /* 테두리 한 줄로 합치기 */
+            margin-top: 20px;
+            font-size: 1.0rem;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+            overflow: hidden; /* 모서리 둥글게 하기 위해 */
+            border-radius: 8px;
+        }
+
+        /* 모든 셀 공통 스타일 */
+        th, td {
+            border: 1px solid #333; /* 셀 테두리 (어두운 회색) */
+            padding: 14px 18px;
+            vertical-align: middle;
+            text-align: left; /* 기본값 (아래에서 개별 재정의) */
+        }
+
+        /* 표 헤더 (구분, 바르는 미녹시딜...) */
+        thead th {
+            background-color: #222; /* 헤더 배경 (더 어두운 회색) */
+            color: #ffffff; /* 헤더 텍스트 (흰색) */
+            font-weight: 600;
+            text-align: center;
+        }
+
+        /* 표의 첫 번째 열 (주성분, 기전...) */
+        tbody th {
+            background-color: #2a2a2a; /* 첫 번째 열 배경 */
+            color: #f0f0f0;
+            font-weight: 600;
+            text-align: center;
+            width: 15%; /* 첫 번째 열 너비 고정 */
+        }
+
+        /* 표 데이터 셀 (내용) */
+        tbody td {
+            background-color: #1e1e1e; /* 데이터 셀 배경 */
+            color: #c0c0c0; /* 데이터 텍스트 (연한 회색) */
+            text-align: center; /* 텍스트 가운데 정렬 */
+        }
+
+        /* 마우스 올렸을 때 강조 */
+        tbody tr:hover th,
+        tbody tr:hover td {
+            background-color: #353535;
+        }
+
+        /* --- '당사 기술' 열 강조 스타일 (빨간색) --- */
+        
+        /* 헤더의 마지막 셀 (당사 기술) */
+        thead th:last-child {
+            border: 3px solid #e74c3c; /* 강조 테두리 (빨간색) */
+            background-color: #402020; /* 강조 배경 (어두운 빨간색) */
+            border-bottom: 1px solid #333; /* 아래쪽 테두리는 유지 */
+        }
+
+        /* 본문의 마지막 셀 (당사 기술 내용) */
+        tbody td:last-child {
+            border-left: 3px solid #e74c3c;
+            border-right: 3px solid #e74c3c;
+            background-color: #3a3030; /* 강조 배경 (살짝 붉은기) */
+            color: #f5f5f5; /* 텍스트 (더 밝은 흰색) */
+            font-weight: 600;
+            text-align: center; /* (이미 중앙 정렬이었음) */
+        }
+
+        /* 본문의 마지막 행의 마지막 셀 (테두리 하단 닫기) */
+        tbody tr:last-child td:last-child {
+            border-bottom: 3px solid #e74c3c;
+        }
+    </style>
+</head>
+<body>
+
+    <table>
+        <thead>
+            <tr>
+                <th>구분</th>
+                <th>바르는 미녹시딜</th>
+                <th>먹는 프로페시아</th>
+                <th>바르는 핀주베</th>
+                <th>당사 기술</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <th>주성분</th>
+                <td>Minoxidil</td>
+                <td>Finasteride</td>
+                <td>Finasteride</td>
+                <td>Peptide + Finasteride</td>
+            </tr>
+            <tr>
+                <th>기전</th>
+                <td>혈관 확장, 모낭 자극</td>
+                <td>전신 5ɑ-reductase Ⅱ억제, DHT 감소</td>
+                <td>두피 국소 5ɑ-reductase Ⅱ억제, DHT 억제</td>
+                <td>선택적 국소 전달</td>
+            </tr>
+            <tr>
+                <th>작용 부위</th>
+                <td>모낭 외부</td>
+                <td>전신 순환</td>
+                <td>두피 내 모낭</td>
+                <td>두피 모낭 집중</td>
+            </tr>
+            <tr>
+                <th>부작용 위험</th>
+                <td>낮음</td>
+                <td>중간-높음</td>
+                <td>매우 낮음</td>
+                <td>극히 낮음</td>
+            </tr>
+            <tr>
+                <th>Finasteride 투여량</th>
+                <td>-</td>
+                <td>1 mg</td>
+                <td>0.11–0.46 mg(1-4회 분사)</td>
+                <td>0.025 mg</td>
+            </tr>
+        </tbody>
+    </table>
+
+</body>
+</html>
