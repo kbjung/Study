@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>탈모 치료제 비교표</title>
+    <style>
+        /* 기본 배경 및 폰트 설정 */
+        body {
+            background-color: #000000;
+            color: #e0e0c0;
+            font-family: 'Pretendard', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
+            padding: 20px;
+        }
+
+        /* 표 전체 스타일 */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            font-size: 0.9rem; /* 열이 많으므로 폰트 크기 조정 */
+            table-layout: fixed; /* 열 너비 균등 분배 */
+        }
+
+        /* 모든 셀의 기본값 */
+        th, td {
+            padding: 12px 8px; /* 좌우 여백 조정 */
+            vertical-align: middle;
+            text-align: center;
+            border: none;
+            line-height: 1.5;
+            word-break: keep-all; /* 단어 단위 줄바꿈 */
+        }
+
+        /* 1. 표 헤더 (thead) 스타일 */
+        thead th {
+            font-weight: 700;
+            color: #ffffff;
+            border-bottom: 2px solid #555;
+            padding-bottom: 15px;
+        }
+
+        /* 2. '구분' 열 (첫 번째 열) 스타일 */
+        tbody th {
+            color: #f0f0f0;
+            font-weight: 600;
+            border-right: 2px solid #555; /* 오른쪽 세로줄 */
+            text-align: center;
+            background-color: #000000;
+        }
+        
+        /* 헤더의 첫 번째 셀에도 오른쪽 세로줄 적용 */
+        thead th:first-child {
+            border-right: 2px solid #555;
+            width: 12%; /* 구분 열 너비 */
+        }
+
+        /* 3. 일반 데이터 셀 스타일 */
+        tbody td {
+            color: #c0c0c0;
+        }
+
+        /* 4. 강조 텍스트 (오렌지색) */
+        .highlight {
+            color: #ff9f40; /* 당사 기술 강조 색상 */
+            font-weight: bold;
+        }
+
+        /* 5. 당사 기술 컬럼 헤더 강조 */
+        .header-highlight {
+            color: #ff9f40;
+        }
+
+        /* 마우스 올렸을 때 행 강조 */
+        tbody tr:hover th,
+        tbody tr:hover td {
+            background-color: #1a1a1a;
+        }
+    </style>
+</head>
+<body>
+
+    <table>
+        <thead>
+            <tr>
+                <th>구분</th>
+                <th>미녹시딜</th>
+                <th>프로페시아</th>
+                <th>아보타트</th>
+                <th>핀쥬베</th>
+                <th class="header-highlight">당사 기술</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <th>주성분</th>
+                <td>Minoxidil</td>
+                <td>Finasteride</td>
+                <td>Dutasteride</td>
+                <td>Finasteride<br>+ 고분자물질</td>
+                <td>Finasteride<br>+ <span class="highlight">펩타이드</span></td>
+            </tr>
+            <tr>
+                <th>기전</th>
+                <td>혈관확장<br>모낭자극</td>
+                <td>전신 5α-reductase<br>II 억제<br>DHT 감소</td>
+                <td>전신 5α-reductase<br>I+II 억제<br>DHT 감소</td>
+                <td>국소 5α-reductase<br>II 억제<br>DHT 감소</td>
+                <td>국소 5α-reductase<br>II 억제<br>DHT 감소<br>+ <span class="highlight">항염증 작용</span></td>
+            </tr>
+            <tr>
+                <th>작용부위</th>
+                <td>국소투여</td>
+                <td>전신순환</td>
+                <td>전신순환</td>
+                <td>국소투여</td>
+                <td>국소투여</td>
+            </tr>
+            <tr>
+                <th>부작용</th>
+                <td>낮음</td>
+                <td>중간-높음</td>
+                <td>중간-높음</td>
+                <td>매우낮음</td>
+                <td><span class="highlight">극히낮음</span></td>
+            </tr>
+            <tr>
+                <th>Finasteride<br>1회 투여량</th>
+                <td>-</td>
+                <td>1 mg</td>
+                <td>-</td>
+                <td>0.11–0.46 mg</td>
+                <td><span class="highlight">0.025 mg</span></td>
+            </tr>
+        </tbody>
+    </table>
+
+</body>
+</html>
