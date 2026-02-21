@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>전체 파이프라인 통합 로드맵</title>
+<style>
+    body {
+        background-color: #000000; 
+        color: #f0f0f0; 
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        padding: 20px;
+    }
+    h1 {
+        color: #ffffff;
+        text-align: center;
+        border-bottom: 2px solid #888; 
+        padding-bottom: 10px;
+    }
+    table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0; 
+        margin-top: 20px;
+        border-radius: 12px; 
+        box-shadow: 0 0 15px rgba(0, 0, 0, 0.5);
+        border: 1px solid #888;
+    }
+    th, td {
+        border: 1px solid #444; 
+        padding: 0; 
+        vertical-align: middle; 
+        height: 32px; /* [수정] 높이를 35px -> 32px로 축소 */
+    }
+    th {
+        background-color: #0d1b2a; 
+        color: #ffffff;
+        text-align: center;
+        font-weight: 600;
+        padding: 5px; 
+        font-size: 0.8em; /* [수정] 폰트 0.85em -> 0.8em */
+    }
+    
+    tr:hover {
+        background-color: #3a3a3a; 
+    }
+    
+    /* 4개 모서리 셀에 둥근 테두리 적용 */
+    thead tr:first-child th:first-child { border-top-left-radius: 11px; }
+    thead tr:first-child th:last-child { border-top-right-radius: 11px; }
+    tbody tr:nth-child(6) td:first-child { border-bottom-left-radius: 11px; } 
+    tbody tr:nth-child(14) td:first-child { border-bottom-left-radius: 11px; } 
+    tbody tr:nth-child(22) td:first-child { border-bottom-left-radius: 11px; } 
+    tbody tr:nth-child(25) td:first-child { border-bottom-left-radius: 11px; } 
+    tbody tr:last-child td:first-child { border-bottom-left-radius: 11px; } 
+    tbody tr:last-child td:last-child { border-bottom-right-radius: 11px; } 
+    tbody tr:last-child td:nth-child(2) { border-bottom-left-radius: 11px; } 
+    
+
+    .category-col {
+        width: 7%; /* [수정] 너비 8% -> 7% */
+        font-weight: 700;
+        text-align: center;
+        padding: 5px; 
+        font-size: 0.85em; /* [수정] 폰트 0.9em -> 0.85em */
+        color: #ffffff;
+    }
+    .task-col {
+        width: 11%; /* [수정] 너비 12% -> 11% */
+        font-weight: 600; 
+        text-align: center; 
+        padding: 5px; 
+        font-size: 0.8em; /* [수정] 폰트 0.85em -> 0.8em */
+    }
+    .timeline-col {
+        width: 8.2%; /* [수정] 너비 (100-7-11) / 10 = 8.2% */
+        text-align: center; 
+        position: relative; 
+    }
+
+    .bar {
+        height: 16px; /* [수정] 높이를 18px -> 16px로 축소 */
+        position: absolute; /* [수정] vertical-align을 위해 absolute */
+        left: 0;
+        top: 50%; /* [수정] 수직 중앙 정렬 */
+        transform: translateY(-50%); /* [수정] 수직 중앙 정렬 */
+        margin: 0;
+        z-index: 1; 
+        /* [삭제] position: relative; 삭제 */
+    }
+    
+    /* 화살표 머리를 pseudo-element로 생성 */
+    .bar::after {
+        content: '';
+        position: absolute;
+        left: 100%; 
+        top: 0;
+        width: 0; 
+        height: 0;
+        border-top: 8px solid transparent; /* [수정] 9px -> 8px */
+        border-bottom: 8px solid transparent; /* [수정] 9px -> 8px */
+        border-left: 8px solid; /* [유지] 화살표 길이 8px */
+    }
+    
+    /* 너비별 클래스 (화살표 8px 제외) */
+    .w-1 { width: calc(100% - 8px); }
+    .w-2 { width: calc(200% - 8px); }
+    .w-3 { width: calc(300% - 8px); }
+    .w-6 { width: calc(600% - 8px); }
+
+    /* 5개 카테고리별 색상 정의 */
+    .cat-color-1 { color: #81d4fa; } /* 탈모 - 하늘색 */
+    .bar-color-1 { background-color: #81d4fa; }
+    .bar-color-1::after { border-left-color: #81d4fa; }
+
+    .cat-color-2 { color: #c5e1a5; } /* 피부암 - 연두색 */
+    .bar-color-2 { background-color: #c5e1a5; }
+    .bar-color-2::after { border-left-color: #c5e1a5; }
+
+    .cat-color-3 { color: #ffd54f; } /* 정부 - 노란색 */
+    .bar-color-3 { background-color: #ffd54f; }
+    .bar-color-3::after { border-left-color: #ffd54f; }
+
+    .cat-color-4 { color: #ce93d8; } /* 인증 - 연보라 */
+    .bar-color-4 { background-color: #ce93d8; }
+    .bar-color-4::after { border-left-color: #ce93d8; }
+    
+    .cat-color-5 { color: #f06292; } /* 투자 - 핑크색 */
+    .bar-color-5 { background-color: #f06292; }
+    .bar-color-5::after { border-left-color: #f06292; }
+
+</style>
+</head>
+<body>
+    <h1>전체 파이프라인 통합 로드맵</h1>
+    <table>
+        <thead>
+            <tr>
+                <th class="category-col">분류</th>
+                <th class="task-col">세부 항목</th>
+                <th class="timeline-col">2026</th>
+                <th class="timeline-col">2027</th>
+                <th class="timeline-col">2028</th>
+                <th class="timeline-col">2029</th>
+                <th class="timeline-col">2030</th>
+                <th class="timeline-col">2031</th>
+                <th class="timeline-col">2032</th>
+                <th class="timeline-col">2033</th>
+                <th class="timeline-col">2034</th>
+                <th class="timeline-col">2035</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td class="category-col cat-color-1" rowspan="6">탈모 케어</td>
+                <td class="task-col cat-color-1">제형 최적화</td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-1"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-1">비임상 시험</td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-1"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+             <tr>
+                <td class="task-col cat-color-1">임상 1상</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-1"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-1">임상 2상</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-2 bar-color-1"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-1">국내 출시</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-1"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+             <tr>
+                <td class="task-col cat-color-1">글로벌 확장</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-1"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+
+            <tr>
+                <td class="category-col cat-color-2" rowspan="8">피부암 치료</td>
+                <td class="task-col cat-color-2">단백질 생산/제형</td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-2"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-2">In-vitro PoC / CMC</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-2"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-2">전임상 (In-vivo/GLP)</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-2"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-2">임상 1상</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-2"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-2">임상 2상</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-2"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-2">임상 3상</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-2"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-2">신약 허가 신청 (NDA)</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-2"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-2">파이프라인 확장</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-2"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+
+            <tr>
+                <td class="category-col cat-color-3" rowspan="8">정부지원금</td>
+                <td class="task-col cat-color-3">예비창업패키지 (총 0.5억)</td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-3"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-3">초기창업패키지 (총 0.7억)</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-3"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-3">초격차 스타트업 1000+ (총 6억)</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-3 bar-color-3"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-3">창업성장기술개발 (총 2억)</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-2 bar-color-3"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-3">딥테크 TIPS (총 15억)</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-3 bar-color-3"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-3">스케일업 밀착지원 (총 12억)</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-3 bar-color-3"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-3">창업도약패키지 (총 3억)</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-3"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-3">팁스연계 창업활성화 (총 6억)</td>
+                <td class="timeline-col"><div class="bar w-6 bar-color-3"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+
+            <tr>
+                <td class="category-col cat-color-4" rowspan="3">인증</td>
+                <td class="task-col cat-color-4">벤처기업 인증</td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-4"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-4">기업부설연구소 인증</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-4"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-4">ISO 9001/14001</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-4"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+
+            <tr>
+                <td class="category-col cat-color-5" rowspan="7">투자</td>
+                <td class="task-col cat-color-5">Seed (3억)</td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-5"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-5">Pre-A (10억)</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-5"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-5">Series A (50억)</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-5"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-5">Series B (120억)</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-5"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-5">Series C (300억)</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-5"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-5">Pre-IPO (800억)</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-5"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col cat-color-5">IPO (—)</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-color-5"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+        </tbody>
+    </table>
+</body>
+</html>
