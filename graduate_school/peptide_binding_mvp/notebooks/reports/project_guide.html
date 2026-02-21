@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PepBind Pipeline - 종합 가이드</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #34495e;
+            margin-top: 30px;
+            border-bottom: 2px solid #ecf0f1;
+            padding-bottom: 8px;
+        }
+        h3 {
+            color: #7f8c8d;
+            margin-top: 20px;
+        }
+        code {
+            background-color: #f8f9fa;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+        }
+        pre {
+            background-color: #282c34;
+            color: #abb2bf;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+        pre code {
+            background-color: transparent;
+            color: inherit;
+            padding: 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 12px;
+            text-align: left;
+        }
+        th {
+            background-color: #3498db;
+            color: white;
+        }
+        tr:nth-child(even) {
+            background-color: #f8f9fa;
+        }
+        .toc {
+            background-color: #ecf0f1;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 30px;
+        }
+        .toc ul {
+            list-style-type: none;
+            padding-left: 0;
+        }
+        .toc li {
+            margin: 8px 0;
+        }
+        .toc a {
+            color: #2980b9;
+            text-decoration: none;
+        }
+        .toc a:hover {
+            text-decoration: underline;
+        }
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 3px;
+            font-size: 0.85em;
+            font-weight: bold;
+            margin-right: 5px;
+        }
+        .badge-success {
+            background-color: #27ae60;
+            color: white;
+        }
+        .badge-info {
+            background-color: #3498db;
+            color: white;
+        }
+        .badge-warning {
+            background-color: #f39c12;
+            color: white;
+        }
+        .mermaid {
+            background-color: white;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        blockquote {
+            border-left: 4px solid #3498db;
+            padding-left: 15px;
+            margin-left: 0;
+            color: #555;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧬 PepBind Pipeline - 종합 가이드 문서</h1>
+        
+        <div class="toc">
+            <h2>📋 목차</h2>
+            <ul>
+                <li><a href="#overview">1. 프로젝트 개요</a></li>
+                <li><a href="#architecture">2. 아키텍처</a></li>
+                <li><a href="#modules">3. 모듈 및 파일 구조</a></li>
+                <li><a href="#installation">4. 설치 및 환경 설정</a></li>
+                <li><a href="#execution">5. 실행 방법</a></li>
+                <li><a href="#configuration">6. 설정 파일 설명</a></li>
+                <li><a href="#usage">7. 주요 기능 사용법</a></li>
+                <li><a href="#results">8. 출력 결과 해석</a></li>
+                <li><a href="#troubleshooting">9. 트러블슈팅</a></li>
+                <li><a href="#advanced">10. 고급 사용법</a></li>
+            </ul>
+        </div>
+
+        <hr>
+
+        <h2 id="overview">프로젝트 개요</h2>
+        
+        <h3>목적</h3>
+        <p><strong>PepBind Pipeline</strong>은 타깃 단백질에 결합하는 최적의 펩타이드를 발견하기 위한 자동화된 AI 기반 파이프라인입니다.</p>
+        
+        <h3>핵심 기능</h3>
+        <ul>
+            <li>🧬 <strong>AI 기반 펩타이드 생성</strong>: PepMLM (ESM-2) 모델을 사용한 펩타이드 후보 생성</li>
+            <li>🔬 <strong>구조 예측</strong>: ColabFold를 통한 단백질-펩타이드 복합체 3D 구조 예측</li>
+            <li>⚡ <strong>구조 최적화</strong>: OpenMM을 이용한 에너지 최소화 및 분자동역학 시뮬레이션</li>
+            <li>🎯 <strong>다중 평가</strong>: Vina, PLIP, PRODIGY, GBSA를 통한 종합적 결합 친화도 평가</li>
+            <li>🔄 <strong>자동 재시도</strong>: 실패한 복합체 자동 감지 및 재생성 (최대 3회)</li>
+            <li>📊 <strong>통합 보고서</strong>: Excel 형식의 상세한 결과 분석 및 순위 매김</li>
+        </ul>
+
+        <h3>주요 특징</h3>
+        <ul>
+            <li><span class="badge badge-success">✓</span> <strong>완전 자동화</strong>: 펩타이드 생성부터 최종 평가까지 원클릭 실행</li>
+            <li><span class="badge badge-success">✓</span> <strong>GPU 가속</strong>: ColabFold 및 OpenMM의 GPU 지원으로 빠른 처리</li>
+            <li><span class="badge badge-success">✓</span> <strong>실패 복구</strong>: GBSA > 100 kcal/mol 또는 OpenMM 실패 시 자동 재시도</li>
+            <li><span class="badge badge-success">✓</span> <strong>다중 평가 지표</strong>: 4가지 독립적 평가 방법의 가중 평균으로 신뢰도 향상</li>
+        </ul>
+
+        <hr>
+
+        <h2 id="architecture">아키텍처</h2>
+        
+        <h3>전체 워크플로우</h3>
+        <div class="mermaid">
+graph TD
+    A[STEP 1: 입력 설정] --> B[STEP 2: PepMLM 펩타이드 생성]
+    B --> C[STEP 3: ColabFold 구조 예측]
+    C --> D[STEP 3b: OpenMM 구조 후처리]
+    D --> E[STEP 4: Vina 도킹]
+    D --> F[STEP 5: PLIP 분석]
+    D --> G[STEP 6: PRODIGY 평가]
+    E --> H{STEP 7: 실패 복합체 확인}
+    F --> H
+    G --> H
+    H -->|GBSA > 100| I[ColabFold 재실행]
+    I --> D
+    H -->|정상| J[STEP 8: 최종 결과 생성]
+    J --> K[Excel 보고서 + PDB Zip]
+        </div>
+
+        <h3>데이터 흐름</h3>
+        <pre><code>타깃 서열 → PepMLM → 펩타이드 후보들
+                          ↓
+                    ColabFold → 복합체 PDB
+                          ↓
+                    OpenMM → 정제된 PDB
+                          ↓
+        ┌─────────────────┼─────────────────┐
+        ↓                 ↓                 ↓
+      Vina              PLIP            PRODIGY
+        ↓                 ↓                 ↓
+        └─────────────────┼─────────────────┘
+                          ↓
+                    가중 평균 스코어
+                          ↓
+                    최종 순위 매김</code></pre>
+
+        <h3>기술 스택</h3>
+        <table>
+            <tr>
+                <th>계층</th>
+                <th>기술</th>
+            </tr>
+            <tr>
+                <td><strong>AI 모델</strong></td>
+                <td>ESM-2 (PepMLM), AlphaFold2 (ColabFold)</td>
+            </tr>
+            <tr>
+                <td><strong>분자동역학</strong></td>
+                <td>OpenMM, GBSA implicit solvent</td>
+            </tr>
+            <tr>
+                <td><strong>도킹</strong></td>
+                <td>AutoDock Vina</td>
+            </tr>
+            <tr>
+                <td><strong>상호작용 분석</strong></td>
+                <td>PLIP</td>
+            </tr>
+            <tr>
+                <td><strong>친화도 예측</strong></td>
+                <td>PRODIGY</td>
+            </tr>
+            <tr>
+                <td><strong>프로그래밍</strong></td>
+                <td>Python 3.11</td>
+            </tr>
+            <tr>
+                <td><strong>주요 라이브러리</strong></td>
+                <td>PyTorch, Transformers, BioPython, OpenMM, Pandas, OpenPyXL</td>
+            </tr>
+        </table>
+
+        <hr>
+
+        <h2 id="modules">모듈 및 파일 구조</h2>
+        
+        <h3>핵심 파일</h3>
+        
+        <h4><code>pepbind05.py</code> (메인 파이프라인)</h4>
+        <p><strong>역할</strong>: 전체 파이프라인 오케스트레이션</p>
+        
+        <p><strong>주요 함수</strong>:</p>
+        <ul>
+            <li><code>generate_peptides_with_pepmlm()</code>: PepMLM을 사용한 펩타이드 생성</li>
+            <li><code>run_colabfold_batch_with_progress()</code>: ColabFold 실행 및 진행 상황 모니터링</li>
+            <li><code>refine_structures_with_openmm_and_relax()</code>: OpenMM 구조 정제</li>
+            <li><code>run_vina_on_rank1()</code>: Vina 도킹 실행</li>
+            <li><code>run_plip_on_rank1()</code>: PLIP 상호작용 분석</li>
+            <li><code>run_prodigy_on_rank1()</code>: PRODIGY 친화도 평가</li>
+            <li><code>compute_openmm_gbsa_binding_energy()</code>: GBSA 결합 에너지 계산</li>
+            <li><code>identify_failed_complexes()</code>: 실패 복합체 탐지</li>
+            <li><code>process_retry_complexes_pipeline()</code>: 재시도 파이프라인</li>
+            <li><code>build_and_save_final_table()</code>: 최종 Excel 보고서 생성</li>
+        </ul>
+
+        <hr>
+
+        <h2 id="installation">설치 및 환경 설정</h2>
+        
+        <h3>시스템 요구사항</h3>
+        
+        <p><strong>하드웨어</strong>:</p>
+        <ul>
+            <li>CPU: 8코어 이상 권장</li>
+            <li>RAM: 32GB 이상 권장</li>
+            <li>GPU: NVIDIA GPU (CUDA 지원) - ColabFold 및 OpenMM 가속용</li>
+            <li>저장공간: 100GB 이상</li>
+        </ul>
+
+        <p><strong>소프트웨어</strong>:</p>
+        <ul>
+            <li>OS: Linux (Ubuntu 20.04+) 또는 WSL2</li>
+            <li>Python: 3.11</li>
+            <li>CUDA: 11.8+ (GPU 사용 시)</li>
+        </ul>
+
+        <h3>설치 단계</h3>
+        
+        <h4>1. Conda 환경 생성</h4>
+        <pre><code># 환경 생성
+conda env create -f environment_pepbind.yml
+
+# 환경 활성화
+conda activate pepbind_openmm</code></pre>
+
+        <h4>2. 추가 패키지 설치</h4>
+        <pre><code># PyTorch (CUDA 버전)
+conda install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
+
+# Transformers
+pip install transformers
+
+# OpenMM
+conda install -c conda-forge openmm
+
+# BioPython
+pip install biopython
+
+# 기타 필수 패키지
+pip install pandas numpy openpyxl</code></pre>
+
+        <h4>3. 외부 도구 설치</h4>
+        <pre><code># ColabFold
+pip install colabfold[alphafold]
+
+# AutoDock Vina
+conda install -c conda-forge vina
+
+# PLIP
+pip install plip
+
+# PRODIGY
+pip install prodigy-prot</code></pre>
+
+        <hr>
+
+        <h2 id="execution">실행 방법</h2>
+        
+        <h3>기본 실행</h3>
+        
+        <h4>1. 설정 수정</h4>
+        <p><code>pepbind05.py</code> 파일의 상단 설정 영역 수정:</p>
+        <pre><code># 타깃 단백질 서열
+TARGET_SEQUENCE = "AFTVTVPKDLYVVEYGSNMTIECKFPVEKQLDLAALIVYWEMEDKNIIQFVHGEEDLKVQHSSYRQRARLLKDQLSLGNAALQITDVKLQDAGVYRCMISYGGADYKRITVKVNAPYNKINQRILVVDPVTSEHELTCQAEGYPKAEVIWTSSDHQVLSGKTTTTNSKREEKLFNVTSTLRINTTTNEIFYCTFRRLDPEENHTAELVIPELPLAHPPNERT"
+
+# 펩타이드 생성 설정
+NUM_PEPTIDES = 50      # 생성할 펩타이드 개수
+PEPTIDE_LENGTH = 4     # 펩타이드 길이 (아미노산 개수)</code></pre>
+
+        <h4>2. 파이프라인 실행</h4>
+        <pre><code># Conda 환경 활성화
+conda activate pepbind_openmm
+
+# 파이프라인 실행
+python pepbind05.py</code></pre>
+
+        <hr>
+
+        <h2 id="configuration">설정 파일 설명</h2>
+        
+        <h3>주요 설정 파라미터</h3>
+        
+        <table>
+            <tr>
+                <th>파라미터</th>
+                <th>기본값</th>
+                <th>설명</th>
+            </tr>
+            <tr>
+                <td><code>NUM_PEPTIDES</code></td>
+                <td>50</td>
+                <td>생성할 펩타이드 후보 개수</td>
+            </tr>
+            <tr>
+                <td><code>PEPTIDE_LENGTH</code></td>
+                <td>4</td>
+                <td>펩타이드 길이 (4-20 권장)</td>
+            </tr>
+            <tr>
+                <td><code>WEIGHT_PRODIGY</code></td>
+                <td>0.50</td>
+                <td>PRODIGY ΔG 가중치</td>
+            </tr>
+            <tr>
+                <td><code>WEIGHT_VINA</code></td>
+                <td>0.25</td>
+                <td>Vina 도킹 스코어 가중치</td>
+            </tr>
+            <tr>
+                <td><code>WEIGHT_PLIP</code></td>
+                <td>0.15</td>
+                <td>PLIP 상호작용 가중치</td>
+            </tr>
+            <tr>
+                <td><code>WEIGHT_IPTM</code></td>
+                <td>0.10</td>
+                <td>ipTM 구조 신뢰도 가중치</td>
+            </tr>
+            <tr>
+                <td><code>MAX_RETRY_ROUNDS</code></td>
+                <td>3</td>
+                <td>최대 재시도 횟수</td>
+            </tr>
+            <tr>
+                <td><code>GBSA_FAILURE_THRESHOLD</code></td>
+                <td>100.0</td>
+                <td>GBSA 실패 임계값 (kcal/mol)</td>
+            </tr>
+        </table>
+
+        <hr>
+
+        <h2 id="results">출력 결과 해석</h2>
+        
+        <h3>폴더 구조</h3>
+        <pre><code>PDP_YYYYMMDD_HHMMSS/
+├── pdb/
+│   ├── colabfold_output/       # 초기 ColabFold 결과
+│   ├── colabfold_retry_1/      # 1차 재시도 결과
+│   ├── colabfold_retry_2/      # 2차 재시도 결과
+│   └── refined/                # OpenMM 정제 PDB
+├── results/
+│   ├── vina/                   # Vina 도킹 결과
+│   ├── plip/                   # PLIP 분석 결과
+│   ├── prodigy/                # PRODIGY 결과
+│   ├── final_peptide_rank_*.xlsx  # 최종 결과
+│   └── peptide_structures_*.zip   # PDB 압축 파일
+└── temp/                       # 임시 파일</code></pre>
+
+        <h3>Excel 보고서 구조</h3>
+        
+        <h4><code>rank</code> 시트</h4>
+        <p>최종 순위 및 주요 정보</p>
+        <table>
+            <tr>
+                <th>컬럼</th>
+                <th>설명</th>
+            </tr>
+            <tr>
+                <td><code>rank</code></td>
+                <td>최종 순위 (FinalScore 기준)</td>
+            </tr>
+            <tr>
+                <td><code>candidate_id</code></td>
+                <td>복합체 ID (complex_0, complex_1, ...)</td>
+            </tr>
+            <tr>
+                <td><code>peptide_seq</code></td>
+                <td>펩타이드 서열</td>
+            </tr>
+            <tr>
+                <td><code>complex_pdb</code></td>
+                <td>PDB 파일명</td>
+            </tr>
+            <tr>
+                <td><code>FinalScore</code></td>
+                <td>최종 종합 점수 (0-1, 높을수록 좋음)</td>
+            </tr>
+            <tr>
+                <td><code>PRODIGY_dG</code></td>
+                <td>PRODIGY 결합 자유에너지 (kcal/mol)</td>
+            </tr>
+            <tr>
+                <td><code>Vina_score</code></td>
+                <td>Vina 도킹 스코어 (kcal/mol)</td>
+            </tr>
+            <tr>
+                <td><code>PLIP_total</code></td>
+                <td>PLIP 총 상호작용 수</td>
+            </tr>
+            <tr>
+                <td><code>ipTM</code></td>
+                <td>구조 신뢰도 (0-1)</td>
+            </tr>
+            <tr>
+                <td><code>GBSA_bind</code></td>
+                <td>GBSA 결합 에너지 (kcal/mol)</td>
+            </tr>
+        </table>
+
+        <hr>
+
+        <h2 id="troubleshooting">트러블슈팅</h2>
+        
+        <h3>일반적인 문제</h3>
+        
+        <h4>1. ColabFold GPU 메모리 부족</h4>
+        <p><strong>증상</strong>: <code>CUDA out of memory</code></p>
+        <p><strong>해결책</strong>:</p>
+        <pre><code># MSA 깊이 줄이기
+COLABFOLD_MAX_MSA = "16:32"  # 기본값: "32:64"
+
+# 또는 CPU 폴백 활성화
+COLABFOLD_CPU_FALLBACK = True</code></pre>
+
+        <h4>2. GBSA 값이 매우 높음 (> 500)</h4>
+        <p><strong>증상</strong>: <code>GBSA > 100 (실제: 750.23)</code></p>
+        <p><strong>원인</strong>: 구조적 문제 (원자 충돌, 부적절한 접힘)</p>
+        <p><strong>해결책</strong>:</p>
+        <ul>
+            <li>자동 재시도 기능이 활성화되어 있으면 자동으로 재생성됨</li>
+            <li>재시도 후에도 실패하면 해당 펩타이드 제외 고려</li>
+        </ul>
+
+        <h4>3. Vina 실행 실패</h4>
+        <p><strong>증상</strong>: <code>실패: Vina 실행 에러(code=1)</code></p>
+        <p><strong>해결책</strong>:</p>
+        <pre><code># Vina 설치 확인
+which vina
+
+# 재설치
+conda install -c conda-forge vina</code></pre>
+
+        <hr>
+
+        <h2 id="advanced">고급 사용법</h2>
+        
+        <h3>커스텀 평가 가중치</h3>
+        <pre><code># 도킹 스코어 중시
+WEIGHT_PRODIGY = 0.30
+WEIGHT_VINA = 0.50
+WEIGHT_PLIP = 0.15
+WEIGHT_IPTM = 0.05
+
+# 구조 신뢰도 중시
+WEIGHT_PRODIGY = 0.40
+WEIGHT_VINA = 0.20
+WEIGHT_PLIP = 0.10
+WEIGHT_IPTM = 0.30</code></pre>
+
+        <h3>재시도 전략 커스터마이징</h3>
+        <pre><code># 재시도 횟수 증가
+MAX_RETRY_ROUNDS = 5
+
+# GBSA 임계값 조정
+GBSA_FAILURE_THRESHOLD = 50.0  # 더 엄격하게
+
+# 재시도 시 다른 seed 사용
+RETRY_RANDOM_SEED_OFFSET = 200</code></pre>
+
+        <hr>
+
+        <p style="text-align: center; color: #7f8c8d; margin-top: 50px;">
+            <strong>문서 버전</strong>: 1.0<br>
+            <strong>최종 업데이트</strong>: 2026-02-03<br>
+            <strong>작성자</strong>: PepBind Development Team
+        </p>
+    </div>
+
+    <script>
+        mermaid.initialize({ 
+            startOnLoad: true,
+            theme: 'default',
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis'
+            }
+        });
+    </script>
+</body>
+</html>
