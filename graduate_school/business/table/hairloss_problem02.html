@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>치료 한계 요약표 (다크모드)</title>
+    <style>
+        /* 기본 배경 및 폰트 설정 */
+        body {
+            background-color: #121212; /* 다크 그레이 */
+            color: #e0e0e0; /* 기본 텍스트 색상 */
+            font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
+            padding: 30px;
+        }
+
+        /* 표 전체 스타일 */
+        table {
+            width: 100%;
+            border-collapse: collapse; /* 테두리 한 줄로 합치기 */
+            margin-top: 20px;
+            font-size: 1.0rem;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+            overflow: hidden; /* 모서리 둥글게 하기 위해 */
+            border-radius: 8px;
+        }
+
+        /* 모든 셀 공통 스타일 */
+        th, td {
+            border: 1px solid #333; /* 셀 테두리 (어두운 회색) */
+            padding: 14px 18px;
+            vertical-align: middle;
+        }
+
+        /* 표 헤더 (구분, 내용) */
+        thead th {
+            background-color: #222; /* 헤더 배경 (더 어두운 회색) */
+            color: #ffffff; /* 헤더 텍스트 (흰색) */
+            font-weight: 600;
+            text-align: center;
+        }
+
+        /* 표의 첫 번째 열 (구분) */
+        tbody th {
+            background-color: #2a2a2a; /* 첫 번째 열 배경 */
+            color: #f0f0f0;
+            font-weight: 600;
+            text-align: center;
+            width: 25%; /* '구분' 열 너비 고정 */
+        }
+
+        /* 표 데이터 셀 (세부 내용) */
+        tbody td {
+            background-color: #1e1e1e; /* 데이터 셀 배경 */
+            color: #c0c0c0; /* 데이터 텍스트 (연한 회색) */
+            text-align: left; /* 이미지 내용을 반영하여 왼쪽 정렬 */
+        }
+
+        /* 마우스 올렸을 때 강조 */
+        tbody tr:hover th,
+        tbody tr:hover td {
+            background-color: #353535;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>모발 치료의 주요 한계점</h1>
+
+    <table>
+        <thead>
+            <tr>
+                <th>구분</th>
+                <th>내용</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <th>기전적 한계</th>
+                <td>모낭 혈류 증가를 통해 성장기를 연장하는 약물로 근본적인 원인을 억제하지 못함</td>
+            </tr>
+            <tr>
+                <th>효과 유지</th>
+                <td>사용 중단 시 3-4개월 내 대부분 효과 소실</td>
+            </tr>
+            <tr>
+                <th>사용상 제약</th>
+                <td>반응률 제한 (3~40%), 피부 투과 제약, 지속 투여 부담 등</td>
+            </tr>
+        </tbody>
+    </table>
+
+</body>
+</html>
