@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>기술 개발 로드맵</title>
+<style>
+    body {
+        background-color: #1a1a1a; /* 어두운 배경 */
+        color: #f0f0f0; /* 밝은 텍스트 */
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        padding: 20px;
+    }
+    h1 {
+        color: #ffffff;
+        text-align: center;
+        /* [수정] H1 강조선 색상 원래대로 */
+        border-bottom: 2px solid #6c5ce7; 
+        padding-bottom: 10px;
+    }
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 20px;
+        box-shadow: 0 0 15px rgba(0, 0, 0, 0.5);
+    }
+    th, td {
+        border: 1px solid #444; /* 어두운 경계선 */
+        padding: 10px 0; 
+        vertical-align: middle;
+        height: 40px; /* 셀 높이 고정 */
+    }
+    th {
+        background-color: #0d1b2a; /* 매우 어두운 파란색 헤더 */
+        color: #ffffff;
+        text-align: center;
+        font-weight: 600;
+        padding: 12px 15px; /* 헤더 패딩 */
+    }
+    tr:nth-child(even) {
+        background-color: #2a2a2a; /* 짝수 행 배경색 */
+    }
+    tr:hover {
+        background-color: #3a3a3a;
+    }
+    .task-col {
+        width: 15%; 
+        font-weight: 500; /* [수정] 폰트 두께 원래대로 */
+        color: #d1c4e9; /* [수정] 단일 색상으로 복원 */
+        text-align: center; 
+        padding: 12px 15px; /* task-col 패딩 */
+    }
+    .timeline-col {
+        width: 12.14%; /* (85% / 7) */
+        text-align: center;
+        position: relative; 
+    }
+
+    /* === [수정] 막대(화살표) CSS === */
+    .bar {
+        height: 25px;
+        position: absolute;
+        left: 0;
+        top: 50%;
+        transform: translateY(-50%);
+        margin: 0;
+        background-color: #6c5ce7; /* [수정] 단일 색상으로 복원 */
+    }
+    /* 1칸 (너비 100%) */
+    .w-1 { 
+        width: 100%; 
+        clip-path: polygon(0% 0%, 95% 0%, 100% 50%, 95% 100%, 0% 100%); 
+    }
+    /* 2칸 (너비 200%) */
+    .w-2 { 
+        width: 200%; 
+        clip-path: polygon(0% 0%, 97.5% 0%, 100% 50%, 97.5% 100%, 0% 100%); 
+    }
+    
+    /* [수정] bar-future 스타일 복원 */
+    .bar-future {
+        background: linear-gradient(90deg, #6c5ce7, #a29bfe); 
+        opacity: 0.8;
+    }
+
+</style>
+</head>
+<body>
+    <h1>기술 개발 로드맵 (H1/H2)</h1>
+    <table>
+        <thead>
+            <tr>
+                <th class="task-col">핵심 목표</th>
+                <th class="timeline-col">2026 H1</th>
+                <th class="timeline-col">2026 H2</th>
+                <th class="timeline-col">2027 H1</th>
+                <th class="timeline-col">2027 H2</th>
+                <th class="timeline-col">2028 H1</th>
+                <th class="timeline-col">2028 H2</th>
+                <th class="timeline-col">2029+</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td class="task-col">제형 최적화</td>
+                <td class="timeline-col"><div class="bar w-1"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col">비임상 시험</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col">임상 1상</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-2"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col">임상 2상</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-2"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col">국내 출시</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1"></div></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col">글로벌 확장</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-1 bar-future"></div></td>
+            </tr>
+        </tbody>
+    </table>
+</body>
+</html>
