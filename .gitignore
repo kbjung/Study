@@ -7,9 +7,6 @@ graduate_school/speaker_diarization/huggingface_token.txt
 graduate_school/business/crawling/\[processing\]naver_shopping_hair_loss_20250910.csv
 *.xlsx
 *.csv
-*.json
-*.txt
-*.html
 graduate_school/business/analysis/out_20251023_172355/chart_price_hist.png
 *.png
-*.md
+
