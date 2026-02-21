@@ -1,0 +1,4 @@
+last_index=3673
+processed_count=3672
+last_url=https://smartstore.naver.com/main/products/12397945480?nl-query=%ED%83%88%EB%AA%A8&nl-au=99920066a45d46898065abb4a72109e7&NaPm=ci%3D99920066a45d46898065abb4a72109e7%7Cct%3Dmfo3c05b%7Ctr%3Dnslsl%7Csn%3D10471645%7Chk%3De9b9e8b23c24a04e04ec54c415b5e879fc94bdf9
+last_reason=service_block_exhausted
