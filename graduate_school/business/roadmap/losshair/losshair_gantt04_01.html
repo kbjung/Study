@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>탈모 케어 기술 개발 로드맵 (분기별)</title>
+<style>
+    body {
+        background-color: #000000; 
+        color: #f0f0f0; 
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        padding: 20px;
+    }
+    h1 {
+        color: #ffffff;
+        text-align: center;
+        border-bottom: 2px solid #888; 
+        padding-bottom: 10px;
+    }
+    table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0; 
+        margin-top: 20px;
+        border-radius: 12px; 
+        box-shadow: 0 0 15px rgba(0, 0, 0, 0.5);
+        border: 1px solid #888;
+    }
+    th, td {
+        border: 1px solid #444; 
+        padding: 10px 0; 
+        vertical-align: middle; 
+        height: 60px; /* [수정] 6줄이므로 60px */
+    }
+    th {
+        background-color: #0d1b2a; 
+        color: #ffffff;
+        text-align: center;
+        font-weight: 600;
+        padding: 10px 5px; 
+        font-size: 1.0em; 
+    }
+    
+    tr:hover {
+        background-color: #3a3a3a; 
+    }
+    
+    /* 4개 모서리 셀에 둥근 테두리 적용 */
+    thead tr:first-child th:first-child { border-top-left-radius: 11px; }
+    thead tr:first-child th:last-child { border-top-right-radius: 11px; }
+    tbody tr:last-child td:first-child { border-bottom-left-radius: 11px; }
+    tbody tr:last-child td:last-child { border-bottom-right-radius: 11px; }
+
+
+    .task-col {
+        width: 10%; 
+        font-weight: 600; 
+        text-align: center; 
+        padding: 10px 5px; 
+        font-size: 1.0em; 
+    }
+    .timeline-col {
+        width: 5.625%; /* (90% / 16) */
+        text-align: center; 
+        position: relative; 
+    }
+
+    .bar {
+        height: 25px; 
+        position: absolute;
+        left: 0;
+        top: 50%;
+        transform: translateY(-50%);
+        margin: 0;
+    }
+
+    /* 너비별 화살표 모양 정의 */
+    .w-1 { width: 100%; clip-path: polygon(0% 0%, 90% 0%, 100% 50%, 90% 100%, 0% 100%); }
+    .w-2 { width: 200%; clip-path: polygon(0% 0%, 95% 0%, 100% 50%, 95% 100%, 0% 100%); }
+    .w-3 { width: 300%; clip-path: polygon(0% 0%, 96.66% 0%, 100% 50%, 96.66% 100%, 0% 100%); }
+    .w-4 { width: 400%; clip-path: polygon(0% 0%, 97.5% 0%, 100% 50%, 97.5% 100%, 0% 100%); }
+
+    /* [수정] 6개 행별 색상 정의 */
+    .task-color-1 { color: #81d4fa; } /* 하늘색 */
+    .bar-color-1 { background-color: #81d4fa; }
+    .task-color-2 { color: #c5e1a5; } /* 연두색 */
+    .bar-color-2 { background-color: #c5e1a5; }
+    .task-color-3 { color: #ffd54f; } /* 노란색 */
+    .bar-color-3 { background-color: #ffd54f; }
+    .task-color-4 { color: #ffab91; } /* 주황색 */
+    .bar-color-4 { background-color: #ffab91; }
+    .task-color-5 { color: #ce93d8; } /* 연보라 */
+    .bar-color-5 { background-color: #ce93d8; }
+    .task-color-6 { color: #f4f4f4; } /* 흰색 */
+    .bar-color-6 { background: linear-gradient(90deg, #e0e0e0, #ffffff); opacity: 0.9;}
+
+</style>
+</head>
+<body>
+    <h1>탈모 케어 기술 개발 로드맵 (분기별)</h1>
+    <table>
+        <thead>
+            <tr>
+                <th class="task-col">핵심 목표</th>
+                <th class="timeline-col">26 Q1</th>
+                <th class="timeline-col">26 Q2</th>
+                <th class="timeline-col">26 Q3</th>
+                <th class="timeline-col">26 Q4</th>
+                <th class="timeline-col">27 Q1</th>
+                <th class="timeline-col">27 Q2</th>
+                <th class="timeline-col">27 Q3</th>
+                <th class="timeline-col">27 Q4</th>
+                <th class="timeline-col">28 Q1</th>
+                <th class="timeline-col">28 Q2</th>
+                <th class="timeline-col">28 Q3</th>
+                <th class="timeline-col">28 Q4</th>
+                <th class="timeline-col">29 Q1</th>
+                <th class="timeline-col">29 Q2</th>
+                <th class="timeline-col">29 Q3</th>
+                <th class="timeline-col">29 Q4</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td class="task-col task-color-1">제형 최적화</td>
+                <td class="timeline-col"><div class="bar w-2 bar-color-1"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col task-color-2">비임상 시험</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-2 bar-color-2"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col task-color-3">임상 1상</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-3 bar-color-3"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col task-color-4">임상 2상</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-3 bar-color-4"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col task-color-5">국내 출시</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-2 bar-color-5"></div></td>
+                <td classm="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+            <tr>
+                <td class="task-col task-color-6">글로벌 확장</td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"><div class="bar w-4 bar-color-6"></div></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+                <td class="timeline-col"></td>
+            </tr>
+        </tbody>
+    </table>
+</body>
+</html>
