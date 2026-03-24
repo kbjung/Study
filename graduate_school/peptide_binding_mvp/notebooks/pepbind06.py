@@ -174,6 +174,16 @@ GBSA_FAILURE_THRESHOLD = float(os.environ.get("GBSA_FAILURE_THRESHOLD", "100.0")
 RETRY_RANDOM_SEED_OFFSET = int(os.environ.get("RETRY_RANDOM_SEED_OFFSET", "100"))  # 재시도 시 seed 오프셋
 RUN_RETRY = True  # 실패 복합체 자동 재시도 기능 활성화 여부
 
+# 13) ADCP (AutoDock CrankPep) 설정 — 보조 지표, FinalScore 미반영
+#     - ADCP 미설치 상태에서는 RUN_ADCP=0으로 유지
+#     - 설치 후 RUN_ADCP=1 및 .trg 파일 경로 설정
+RUN_ADCP = int(os.environ.get("RUN_ADCP", "0"))  # 0=비활성화, 1=활성화
+ADCP_CMD = os.environ.get("ADCP_CMD", "adcp").strip()
+ADCP_NUM_STEPS = int(os.environ.get("ADCP_NUM_STEPS", "2500000"))  # MC 시뮬레이션 단계 수
+ADCP_NB_RUNS = int(os.environ.get("ADCP_NB_RUNS", "50"))           # 도킹 실행 횟수
+ADCP_MAX_CORES = int(os.environ.get("ADCP_MAX_CORES", "4"))        # 최대 CPU 코어 수
+ADCP_TRG_FILE = os.environ.get("ADCP_TRG_FILE", "").strip()        # .trg 파일 경로 (AGFR로 사전 준비)
+
 
 # =====================================================================
 # === 공통 설정 / 유틸 =================================================
@@ -231,6 +241,7 @@ RANK_TABLE_HEADERS = [
     "PLIP_saltbridge",
     "ipTM",
     "GBSA_bind",
+    "ADCP_score(kcal/mol)",
 ]
 
 ALL_METRICS_HEADERS = [
@@ -255,6 +266,7 @@ ALL_METRICS_HEADERS = [
     "GBSA_E_receptor(kcal/mol)",
     "GBSA_E_peptide(kcal/mol)",
     "GBSA_bind",
+    "ADCP_score(kcal/mol)",
 ]
 
 NORM_DEBUG_HEADERS = [
@@ -317,6 +329,8 @@ def init_results_cache(peptides: list) -> dict:
             "iptm": None,
             "alphafold_status": None,
             "retry_round": 0,  # 0 = 초기 실행, 1,2,3 = 재시도 라운드
+            "adcp_score": None,
+            "adcp_status": None,
         }
     return cache
 
@@ -626,6 +640,7 @@ def init_workspace():
         "colabfold_out": ws_root / "pdb" / "colabfold_output",
         "results": ws_root / "results",
         "vina": ws_root / "results" / "vina",
+        "adcp": ws_root / "results" / "adcp",
         "plip": ws_root / "results" / "plip",
         "prodigy": ws_root / "results" / "prodigy",
         "temp": ws_root / "temp",
@@ -2631,6 +2646,319 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
 
 
 # =====================================================================
+# === STEP 4b: ADCP (AutoDock CrankPep) 펩타이드 도킹 ===============
+# =====================================================================
+
+ADCP_SUMMARY_COLS = [
+    "complex",
+    "adcp_status",
+    "adcp_score",
+]
+
+
+def parse_adcp_best_energy(log_text: str):
+    """
+    ADCP 실행 stdout/log에서 최적 결합 에너지(kcal/mol)를 파싱.
+
+    ADCP 출력 형식 예시:
+        best energy: -7.5
+        LowestEne  -6.32
+        Best Score: -8.1 kcal/mol
+        Affinity: -5.2 (kcal/mol)
+
+    Returns:
+        float 또는 None
+    """
+    if not log_text:
+        return None
+
+    sign_pattern = r"[+\-−]?"
+    float_pattern = rf"{sign_pattern}\d+(?:\.\d+)?(?:[eE][+\-−]?\d+)?"
+
+    patterns = [
+        # "best energy: -7.5" 또는 "best energy = -7.5"
+        rf"best\s+energy\s*[:=]\s*({float_pattern})",
+        # "LowestEne  -6.32"
+        rf"LowestEne\s+({float_pattern})",
+        # "Best Score: -8.1"
+        rf"Best\s+Score\s*[:=]\s*({float_pattern})",
+        # "Affinity: -5.2 (kcal/mol)"
+        rf"Affinity\s*[:=]\s*({float_pattern})",
+        # "SCORE: -7.3"
+        rf"SCORE\s*[:=]\s*({float_pattern})",
+    ]
+
+    for pat in patterns:
+        m = re.search(pat, log_text, re.IGNORECASE)
+        if m:
+            raw = m.group(1).replace("−", "-")
+            try:
+                return float(raw)
+            except ValueError:
+                pass
+
+    # 백업: 전체에서 [-50, 0] 범위의 실수 중 가장 음수 값
+    candidates = []
+    for m in re.finditer(float_pattern, log_text):
+        raw = m.group(0).replace("−", "-")
+        try:
+            val = float(raw)
+        except ValueError:
+            continue
+        if -50.0 <= val <= 0.0:
+            candidates.append(val)
+
+    if candidates:
+        return min(candidates)
+
+    return None
+
+
+def run_adcp_on_rank1(
+    rank1_pdbs: list,
+    adcp_dir: Path,
+    trg_file: Path,
+    peptides: list,
+):
+    """
+    ADCP (AutoDock CrankPep) 펩타이드 도킹 실행.
+
+    각 복합체에 대해 펩타이드 서열을 ADCP에 전달하여 도킹 스코어를 산출합니다.
+    .trg 파일(AGFR로 사전 준비)이 필요합니다.
+
+    Args:
+        rank1_pdbs: rank_001 PDB 파일 리스트
+        adcp_dir: ADCP 결과 저장 디렉토리
+        trg_file: AGFR로 생성한 타겟 .trg 파일 경로
+        peptides: 펩타이드 서열 리스트
+
+    산출물:
+        adcp_summary.xlsx (complex, adcp_status, adcp_score)
+    """
+    print("\n" + "=" * 80)
+    print("STEP 4b: ADCP (AutoDock CrankPep) 펩타이드 도킹")
+    print("=" * 80)
+
+    if not rank1_pdbs:
+        print("[WARN] ADCP 실행할 rank_001 PDB가 없습니다.")
+        return
+
+    if not shutil.which(ADCP_CMD):
+        print(f"[WARN] ADCP_CMD='{ADCP_CMD}' 실행 파일을 찾을 수 없습니다. (PATH 확인 필요)")
+        return
+
+    if not trg_file or not Path(trg_file).exists():
+        print(f"[WARN] .trg 파일이 존재하지 않습니다: {trg_file}")
+        print("       AGFR로 타겟 .trg 파일을 먼저 준비하세요.")
+        return
+
+    adcp_dir.mkdir(parents=True, exist_ok=True)
+    summary_rows = []
+    debug_lines = []
+
+    # complex_id → peptide 매핑
+    id_to_pep = {f"complex_{i}": pep for i, pep in enumerate(peptides)}
+
+    for complex_pdb in rank1_pdbs:
+        base = complex_pdb.stem
+
+        # complex_id 추출 (complex_0, complex_1, ...)
+        match = re.match(r'(complex_\d+)', base)
+        candidate_id = match.group(1) if match else base.split("_unrelaxed")[0]
+        pep_seq = id_to_pep.get(candidate_id, "")
+
+        if not pep_seq:
+            status = "스킵: 펩타이드 서열 매핑 실패"
+            print(f"[WARN] {base} {status}")
+            summary_rows.append({"complex": base, "adcp_status": status, "adcp_score": None})
+            debug_lines.append(f"{base}\t{status}")
+            continue
+
+        complex_out_dir = adcp_dir / base
+        complex_out_dir.mkdir(parents=True, exist_ok=True)
+        log_file = complex_out_dir / f"{base}_adcp.log"
+
+        # ADCP 명령어 구성
+        # -T: 타겟 파일, -S: 펩타이드 서열, -N: 실행 횟수, -n: MC 단계 수
+        adcp_cmd = [
+            ADCP_CMD,
+            "-T", str(trg_file),
+            "-S", pep_seq,
+            "-N", str(ADCP_NB_RUNS),
+            "-n", str(ADCP_NUM_STEPS),
+            "-o", str(complex_out_dir / f"{base}_adcp"),
+        ]
+
+        # CPU 코어 제한 (--maxCores 옵션 지원 시)
+        if ADCP_MAX_CORES > 0:
+            adcp_cmd.extend(["--maxCores", str(ADCP_MAX_CORES)])
+
+        print(f"\n[RUN] {' '.join(adcp_cmd)}")
+        result = subprocess.run(
+            adcp_cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+
+        # stdout/stderr 로그 저장
+        with open(log_file, "w", encoding="utf-8") as lf:
+            lf.write("=== STDOUT ===\n")
+            lf.write(result.stdout or "")
+            lf.write("\n\n=== STDERR ===\n")
+            lf.write(result.stderr or "")
+
+        best_score = None
+        status = ""
+
+        if result.returncode != 0:
+            status = f"실패: ADCP 실행 에러(code={result.returncode})"
+            print(f"[ERROR] {status}. 로그: {log_file}")
+            print((result.stderr or "")[:300])
+            debug_lines.append(f"{base}\t{status}\tlog={log_file.name}")
+        else:
+            # stdout + summary/dlg 파일에서 에너지 파싱
+            combined_text = result.stdout or ""
+
+            # ADCP 출력 파일(summary.dlg, *_out.pdb 등)에서도 에너지 탐색
+            for ext in ("*.dlg", "*_summary*", "*_out.pdb"):
+                for f in complex_out_dir.glob(ext):
+                    try:
+                        combined_text += "\n" + f.read_text(encoding="utf-8", errors="ignore")
+                    except Exception:
+                        pass
+
+            best_score = parse_adcp_best_energy(combined_text)
+            if best_score is None:
+                status = "파싱실패: ADCP 출력에서 에너지 패턴 없음"
+                print(f"[WARN] {base} ADCP 에너지 파싱 실패. 로그: {log_file}")
+                debug_lines.append(f"{base}\t{status}\tlog={log_file.name}")
+            else:
+                status = "정상"
+                print(f"[INFO] {base} ADCP best energy: {best_score:.2f} kcal/mol")
+                debug_lines.append(f"{base}\t{status}\t{best_score}")
+
+        summary_rows.append({
+            "complex": base,
+            "adcp_status": status,
+            "adcp_score": best_score,
+        })
+
+    # adcp_summary.xlsx 저장
+    try:
+        if summary_rows:
+            df_new = pd.DataFrame(summary_rows)
+            df_new = df_new[ADCP_SUMMARY_COLS]
+            xlsx_path = adcp_dir / "adcp_summary.xlsx"
+
+            if xlsx_path.exists():
+                try:
+                    df_existing = pd.read_excel(xlsx_path)
+                    new_complexes = set(df_new["complex"].tolist())
+                    df_existing = df_existing[~df_existing["complex"].isin(new_complexes)]
+                    df_merged = pd.concat([df_existing, df_new], ignore_index=True)
+                    df_merged = df_merged[ADCP_SUMMARY_COLS]
+                    df_merged.to_excel(xlsx_path, index=False)
+                    print(f"\n✅ ADCP 요약 엑셀 업데이트 (병합): {xlsx_path} (총 {len(df_merged)}개)")
+                except Exception:
+                    df_new.to_excel(xlsx_path, index=False)
+                    print(f"\n✅ ADCP 요약 엑셀 저장: {xlsx_path}")
+            else:
+                df_new.to_excel(xlsx_path, index=False)
+                print(f"\n✅ ADCP 요약 엑셀 저장: {xlsx_path}")
+        else:
+            print("[INFO] ADCP 요약에 기록할 데이터가 없습니다.")
+    except Exception as e:
+        print(f"[WARN] ADCP 요약 엑셀 저장 실패: {e}")
+
+    if debug_lines:
+        debug_file = adcp_dir / "adcp_debug.txt"
+        debug_file.write_text("\n".join(debug_lines), encoding="utf-8")
+        print(f"[INFO] ADCP 디버그 로그: {debug_file}")
+
+    print("=" * 80)
+
+
+def load_adcp_scores(adcp_dir: Path):
+    """
+    adcp_summary.xlsx에서 complex별 ADCP score와 상태를 로딩.
+
+    Returns:
+        scores: dict[complex_id] = float 또는 None
+        statuses: dict[complex_id] = 상태 문자열
+    """
+    scores = {}
+    statuses = {}
+
+    if not adcp_dir or not adcp_dir.exists():
+        return scores, statuses
+
+    summary_xlsx = adcp_dir / "adcp_summary.xlsx"
+    if not summary_xlsx.exists():
+        print("[WARN] adcp_summary.xlsx를 찾지 못했습니다:", adcp_dir)
+        return scores, statuses
+
+    try:
+        df = pd.read_excel(summary_xlsx)
+        print(f"[INFO] ADCP 요약 엑셀에서 점수 로드: {summary_xlsx}")
+    except Exception as e:
+        print(f"[WARN] ADCP 엑셀 로딩 실패: {e}")
+        return scores, statuses
+
+    if "complex" not in df.columns:
+        print("[WARN] ADCP summary 데이터프레임에 'complex' 컬럼이 없습니다.")
+        return scores, statuses
+
+    has_status = "adcp_status" in df.columns
+
+    for _, row in df.iterrows():
+        base = row.get("complex")
+        if isinstance(base, float) and pd.isna(base):
+            continue
+        base = str(base).strip()
+        if not base:
+            continue
+
+        val = row.get("adcp_score")
+        if pd.isna(val):
+            scores[base] = None
+        else:
+            try:
+                scores[base] = float(val)
+            except (TypeError, ValueError):
+                scores[base] = None
+
+        if has_status:
+            s = row.get("adcp_status")
+            statuses[base] = "" if pd.isna(s) else str(s)
+        else:
+            statuses[base] = "정상" if scores[base] is not None else "미기록"
+
+    print(f"[INFO] ADCP 점수를 읽어온 구조 수: {len(scores)}")
+    return scores, statuses
+
+
+def update_cache_from_adcp(cache: dict, adcp_scores: dict, adcp_statuses: dict):
+    """
+    ADCP 점수를 캐시에 업데이트.
+    """
+    for complex_id, data in cache.items():
+        pdb_path = data.get("pdb_path")
+        if not pdb_path:
+            continue
+
+        base = pdb_path.stem if hasattr(pdb_path, 'stem') else str(pdb_path)
+
+        if base in adcp_scores:
+            cache[complex_id]["adcp_score"] = adcp_scores[base]
+            cache[complex_id]["adcp_status"] = adcp_statuses.get(base, "정상")
+        elif complex_id in adcp_scores:
+            cache[complex_id]["adcp_score"] = adcp_scores[complex_id]
+            cache[complex_id]["adcp_status"] = adcp_statuses.get(complex_id, "정상")
+
+
+# =====================================================================
 # === STEP 5: PLIP 상호작용 분석 =====================================
 # =====================================================================
 
@@ -3567,6 +3895,11 @@ def build_and_save_final_table(
                 w_iptm    * iptm_norm.get(base, 0.0)
             )
 
+        # ADCP 점수 (캐시에서 가져오기)
+        adcp_score_val = None
+        if results_cache and candidate_id in results_cache:
+            adcp_score_val = results_cache[candidate_id].get("adcp_score")
+
         rows.append({
             "candidate_id":     candidate_id,
             "peptide_seq":      pep_seq,
@@ -3588,9 +3921,9 @@ def build_and_save_final_table(
             "gbsa_e_receptor":  gbsa_e_receptor,
             "gbsa_e_peptide":   gbsa_e_peptide,
             "gbsa_bind":        gbsa_bind,
-            "retry_round":      retry_round,  # Option 3: 재시도 라운드 기록
+            "adcp_score":       adcp_score_val,
+            "retry_round":      retry_round,
             "complex_stem":     base,
-
         })
 
 
@@ -3634,6 +3967,7 @@ def build_and_save_final_table(
         "PLIP_saltbridge": lambda r, idx: r["plip_salt"],
         "ipTM": lambda r, idx: r["iptm"],
         "GBSA_bind": lambda r, idx: r.get("gbsa_bind"),
+        "ADCP_score(kcal/mol)": lambda r, idx: r.get("adcp_score"),
     }
 
     for idx, r in enumerate(rows, start=1):
@@ -3676,6 +4010,7 @@ def build_and_save_final_table(
         "GBSA_E_receptor(kcal/mol)": lambda r, idx: r.get("gbsa_e_receptor"),
         "GBSA_E_peptide(kcal/mol)": lambda r, idx: r.get("gbsa_e_peptide"),
         "GBSA_bind": lambda r, idx: r.get("gbsa_bind"),
+        "ADCP_score(kcal/mol)": lambda r, idx: r.get("adcp_score"),
     }
 
     for idx, r in enumerate(rows, start=1):
@@ -4231,7 +4566,7 @@ def main():
             md_time_ps=REFINE_MD_TIME_PS,
             timestep_fs=REFINE_TIMESTEP_FS,
             restraint_k=REFINE_RESTRAINT_K,
-            results_cache=results_cache,  # Option 3: 캐시에 GBSA 저장
+            results_cache=results_cache,  # 캐시에 GBSA 저장
         )
         step3b_end = datetime.now()
         print_step_timing("STEP 3b: 구조 후처리 (minimization/relax/MD)", step3b_start, step3b_end)
@@ -4240,108 +4575,57 @@ def main():
         print("\n[INFO] RUN_REFINEMENT=False 또는 rank_001 PDB 없음 → 구조 후처리 단계 스킵")
         print_step_timing("STEP 3b: 구조 후처리 (스킵)", now, now)
 
-    # STEP 4: Vina
-    if RUN_VINA:
-        step4_start = datetime.now()
-        run_vina_on_rank1(rank1_pdbs, folders["vina"])
-        step4_end = datetime.now()
-        print_step_timing("STEP 4: AutoDock Vina 도킹", step4_start, step4_end)
-        
-        # Option 3: Vina 결과를 캐시에 업데이트
-        vina_scores, vina_statuses = load_vina_scores(folders["vina"])
-        update_cache_from_vina(results_cache, vina_scores, vina_statuses)
-        print(f"[INFO] Vina 점수 캐시 업데이트 완료 ({len(vina_scores)}개)")
-    else:
-        now = datetime.now()
-        print("\n[INFO] RUN_VINA=False → Vina 단계 스킵")
-        print_step_timing("STEP 4: AutoDock Vina 도킹 (스킵)", now, now)
-
-    # STEP 5: PLIP
-    if RUN_PLIP:
-        step5_start = datetime.now()
-        run_plip_on_rank1(rank1_pdbs, folders["plip"])
-        step5_end = datetime.now()
-        print_step_timing("STEP 5: PLIP 상호작용 분석", step5_start, step5_end)
-        
-        # Option 3: PLIP 결과를 캐시에 업데이트
-        plip_scores, _ = load_plip_scores(folders["plip"])  # 튜플 언패킹
-        update_cache_from_plip(results_cache, plip_scores)
-        print(f"[INFO] PLIP 점수 캐시 업데이트 완료 ({len(plip_scores)}개)")
-    else:
-        now = datetime.now()
-        print("\n[INFO] RUN_PLIP=False → PLIP 단계 스킵")
-        print_step_timing("STEP 5: PLIP 상호작용 분석 (스킵)", now, now)
-
-    # STEP 6: PRODIGY
-    if RUN_PRODIGY:
-        step6_start = datetime.now()
-        run_prodigy_on_rank1(rank1_pdbs, folders["prodigy"])
-        step6_end = datetime.now()
-        print_step_timing("STEP 6: PRODIGY 결합 친화도 평가", step6_start, step6_end)
-        
-        # Option 3: PRODIGY 결과를 캐시에 업데이트
-        prodigy_scores, prodigy_statuses = load_prodigy_scores(folders["prodigy"])
-        update_cache_from_prodigy(results_cache, prodigy_scores, prodigy_statuses)
-        print(f"[INFO] PRODIGY 점수 캐시 업데이트 완료 ({len(prodigy_scores)}개)")
-    else:
-        now = datetime.now()
-        print("\n[INFO] RUN_PRODIGY=False → PRODIGY 단계 스킵")
-        print_step_timing("STEP 6: PRODIGY 결합 친화도 평가 (스킵)", now, now)
-
-    # ipTM 점수 로드 및 캐시 업데이트
-    iptm_scores = load_iptm_scores(folders["colabfold_out"], rank1_pdbs, folders["pdb"])
-    update_cache_from_iptm(results_cache, iptm_scores)
-    print(f"[INFO] ipTM 점수 캐시 업데이트 완료 ({len(iptm_scores)}개)")
-
     # ─────────────────────────────────────────────────────────────────────
-    # STEP 7: 실패 복합체 자동 재시도 (Option 3: 캐시 기반)
+    # GBSA 재시도 루프 (STEP 3b 직후, 평가 단계 이전)
+    # - GBSA > 기준값인 복합체를 ColabFold + OpenMM만 재시도
+    # - 모든 복합체가 기준 통과 후 평가(Vina/ADCP/PLIP/PRODIGY) 한 번만 실행
     # ─────────────────────────────────────────────────────────────────────
     if RUN_RETRY and rank1_pdbs and peptides:
-        step7_start = datetime.now()
-        
+        step_retry_start = datetime.now()
+
         print("\n" + "=" * 80)
-        print("STEP 7: 실패 복합체 자동 재시도 (캐시 기반)")
+        print("GBSA 재시도 루프 (STEP 3 → 3b 반복)")
         print("=" * 80)
         print(f"  MAX_RETRY_ROUNDS       = {MAX_RETRY_ROUNDS}")
         print(f"  GBSA_FAILURE_THRESHOLD = {GBSA_FAILURE_THRESHOLD}")
         print(f"  RETRY_RANDOM_SEED_OFFSET = {RETRY_RANDOM_SEED_OFFSET}")
         print(f"  전체 복합체 개수        = {len(peptides)}")
-        
+
         # 초기 실패 복합체 탐지 (캐시에서)
         print(f"\n[초기 탐지] 캐시에서 실패 복합체 확인 중...")
         initial_failed = get_failed_complexes_from_cache(
             results_cache,
             threshold=GBSA_FAILURE_THRESHOLD,
         )
-        
+
         if not initial_failed:
             print("✅ 모든 복합체가 정상 범위 내 → 재시도 불필요")
-            step7_end = datetime.now()
-            print_step_timing("STEP 7: 실패 복합체 재시도 (불필요)", step7_start, step7_end)
+            step_retry_end = datetime.now()
+            print_step_timing("GBSA 재시도 루프 (불필요)", step_retry_start, step_retry_end)
         else:
             print(f"❌ 실패 복합체 {len(initial_failed)}개 발견 (전체 {len(peptides)}개 중)")
-            
+
             retry_round = 0
             while retry_round < MAX_RETRY_ROUNDS:
                 retry_round += 1
-                
+
                 print(f"\n{'='*60}")
-                print(f"[재시도 {retry_round}/{MAX_RETRY_ROUNDS}] 시작")
+                print(f"[재시도 {retry_round}/{MAX_RETRY_ROUNDS}] 시작 (ColabFold + OpenMM만)")
                 print(f"{'='*60}")
-                
+
                 # 현재 실패 복합체 재확인 (캐시에서)
                 failed = get_failed_complexes_from_cache(
                     results_cache,
                     threshold=GBSA_FAILURE_THRESHOLD,
                 )
-                
+
                 if not failed:
                     print(f"✅ 모든 복합체 정상화 완료!")
                     print(f"   - 초기 실패: {len(initial_failed)}개")
                     print(f"   - 현재 실패: 0개")
                     print(f"   - 성공적으로 복구된 복합체: {len(initial_failed)}개")
                     break
-                
+
                 print(f"📊 현재 상태:")
                 print(f"   - 초기 실패 복합체: {len(initial_failed)}개")
                 print(f"   - 현재 실패 복합체: {len(failed)}개")
@@ -4349,14 +4633,14 @@ def main():
                 print(f"\n재시도 대상 {len(failed)}개:")
                 for complex_id, pep, reason in failed:
                     print(f"  - {complex_id} ({pep}): {reason}")
-                
-                # 7-2: ColabFold 재실행 (다른 seed)
+
+                # ColabFold 재실행 (다른 seed)
                 retry_output_dir = folders["pdb"] / f"colabfold_retry_{retry_round}"
                 retry_output_dir.mkdir(parents=True, exist_ok=True)
-                
+
                 peptides_to_retry = [pep for _, pep, _ in failed]
                 original_indices = [results_cache[cid]["index"] for cid, _, _ in failed]
-                
+
                 retry_pdbs = run_colabfold_for_subset(
                     peptides_to_retry,
                     original_indices,
@@ -4365,31 +4649,28 @@ def main():
                     folders["temp"],
                     random_seed=RETRY_RANDOM_SEED_OFFSET * retry_round,
                 )
-                
+
                 if not retry_pdbs:
                     print(f"[WARN] ColabFold 재시도 결과 없음")
                     continue
-                
-                # 7-3: 배치 처리 - 모든 복합체 OpenMM 정제 + GBSA 계산
-                print(f"\n[재시도 {retry_round}] 단계 1: OpenMM 정제 + GBSA 계산 ({len(retry_pdbs)}개)")
+
+                # OpenMM 정제 + GBSA 계산만 수행
+                print(f"\n[재시도 {retry_round}] OpenMM 정제 + GBSA 계산 ({len(retry_pdbs)}개)")
                 temp_dir = folders["pdb"] / "temp_gbsa"
                 temp_dir.mkdir(parents=True, exist_ok=True)
                 refined_dir = folders["pdb"] / "refined"
                 refined_dir.mkdir(parents=True, exist_ok=True)
-                
-                # 개선된 복합체 목록 수집
-                improved_complexes = []  # [(complex_id, refined_pdb_path), ...]
-                
+
                 for retry_item in retry_pdbs:
                     orig_idx, pdb_path = retry_item
                     complex_id = f"complex_{orig_idx}"
-                    
+
                     if complex_id not in results_cache:
                         continue
-                    
+
                     old_gbsa = results_cache[complex_id].get("gbsa")
                     print(f"\n  [{complex_id}] 처리 중 (기존 GBSA: {old_gbsa})")
-                    
+
                     # OpenMM 정제
                     openmm_ok = False
                     current = pdb_path
@@ -4406,7 +4687,7 @@ def main():
                         openmm_ok = True
                     except Exception as e:
                         print(f"    [WARN] OpenMM 실패: {e}")
-                    
+
                     # GBSA 계산
                     try:
                         gbsa_result = compute_openmm_gbsa_binding_energy(current, temp_dir)
@@ -4415,8 +4696,8 @@ def main():
                         print(f"    [WARN] GBSA 계산 실패: {e}")
                         new_gbsa = None
                         gbsa_result = {"status": f"실패: {e}", "GBSA_bind": None}
-                    
-                    # 개선된 경우만 캐시 업데이트 및 목록 추가
+
+                    # 개선된 경우만 캐시 + rank1_pdbs 업데이트
                     if new_gbsa is not None:
                         old_gbsa_val = old_gbsa if old_gbsa is not None else float("inf")
                         if new_gbsa < old_gbsa_val:
@@ -4429,82 +4710,20 @@ def main():
                             results_cache[complex_id]["gbsa_e_receptor"] = gbsa_result.get("E_receptor")
                             results_cache[complex_id]["gbsa_e_peptide"] = gbsa_result.get("E_peptide")
                             results_cache[complex_id]["retry_round"] = retry_round
-                            
-                            # rank1_pdbs 리스트도 업데이트
+
                             idx = results_cache[complex_id]["index"]
                             if idx < len(rank1_pdbs):
                                 rank1_pdbs[idx] = current
-                            
-                            # 개선된 복합체 목록에 추가
-                            improved_complexes.append((complex_id, current))
                         else:
                             print(f"    ❌ 개선 안됨: {old_gbsa_val:.2f} → {new_gbsa:.2f} kcal/mol (기존 유지)")
                     else:
                         print(f"    ❌ GBSA 미계산 (기존 유지)")
-                
-                # 개선된 복합체가 있으면 배치 평가 수행
-                if improved_complexes:
-                    improved_pdbs = [pdb for _, pdb in improved_complexes]
-                    print(f"\n[재시도 {retry_round}] 단계 2: 개선된 {len(improved_pdbs)}개 복합체 평가")
-                    
-                    # 7-4: 배치 Vina 평가
-                    if RUN_VINA:
-                        print(f"\n  [Vina] {len(improved_pdbs)}개 복합체 도킹 중...")
-                        try:
-                            run_vina_on_rank1(improved_pdbs, folders["vina"])
-                            vina_scores, vina_statuses = load_vina_scores(folders["vina"])
-                            for complex_id, pdb_path in improved_complexes:
-                                base = pdb_path.stem
-                                if base in vina_scores:
-                                    results_cache[complex_id]["vina_score"] = vina_scores[base]
-                                    results_cache[complex_id]["vina_status"] = vina_statuses.get(base, "정상")
-                                    print(f"    {complex_id}: {vina_scores[base]:.2f} kcal/mol")
-                        except Exception as e:
-                            print(f"    [WARN] Vina 배치 실패: {e}")
-                    
-                    # 7-5: 배치 PLIP 평가
-                    if RUN_PLIP:
-                        print(f"\n  [PLIP] {len(improved_pdbs)}개 복합체 상호작용 분석 중...")
-                        try:
-                            run_plip_on_rank1(improved_pdbs, folders["plip"])
-                            plip_scores, _ = load_plip_scores(folders["plip"])
-                            for complex_id, pdb_path in improved_complexes:
-                                base = pdb_path.stem
-                                plip_data = plip_scores.get(base)
-                                if plip_data:
-                                    results_cache[complex_id]["plip_total"] = plip_data.get("weighted_total")
-                                    results_cache[complex_id]["plip_hbond"] = plip_data.get("hbond")
-                                    results_cache[complex_id]["plip_hydrophobic"] = plip_data.get("hydro")
-                                    results_cache[complex_id]["plip_saltbridge"] = plip_data.get("salt")
-                                    results_cache[complex_id]["plip_status"] = plip_data.get("status", "정상")
-                                    print(f"    {complex_id}: {plip_data.get('weighted_total')} interactions")
-                        except Exception as e:
-                            print(f"    [WARN] PLIP 배치 실패: {e}")
-                    
-                    # 7-6: 배치 PRODIGY 평가
-                    if RUN_PRODIGY:
-                        print(f"\n  [PRODIGY] {len(improved_pdbs)}개 복합체 결합 친화도 평가 중...")
-                        try:
-                            run_prodigy_on_rank1(improved_pdbs, folders["prodigy"])
-                            prodigy_scores, prodigy_statuses = load_prodigy_scores(folders["prodigy"])
-                            for complex_id, pdb_path in improved_complexes:
-                                base = pdb_path.stem
-                                if base in prodigy_scores:
-                                    results_cache[complex_id]["prodigy_dg"] = prodigy_scores[base]
-                                    results_cache[complex_id]["prodigy_status"] = prodigy_statuses.get(base, "정상")
-                                    print(f"    {complex_id}: {prodigy_scores[base]:.2f} kcal/mol")
-                        except Exception as e:
-                            print(f"    [WARN] PRODIGY 배치 실패: {e}")
-                    
-                    print(f"\n  ✅ {len(improved_complexes)}개 복합체 평가 완료")
-                else:
-                    print(f"\n  [INFO] 개선된 복합체 없음 - 평가 스킵")
-                
+
                 print(f"\n[재시도 {retry_round}] 완료")
-            
+
             # 최종 요약
             print(f"\n{'='*60}")
-            print(f"STEP 7 최종 요약")
+            print(f"GBSA 재시도 루프 최종 요약")
             print(f"{'='*60}")
             final_failed = get_failed_complexes_from_cache(
                 results_cache,
@@ -4514,17 +4733,96 @@ def main():
             print(f"  최종 실패 복합체: {len(final_failed)}개")
             print(f"  복구 성공: {len(initial_failed) - len(final_failed)}개")
             print(f"  재시도 횟수: {retry_round}회")
-            
-            # Summary 파일 업데이트 (재시도된 복합체의 최종 값 반영)
-            update_summary_files_from_cache(results_cache, folders)
-            
-            step7_end = datetime.now()
-            print_step_timing(f"STEP 7: 실패 복합체 재시도 ({retry_round}회)", step7_start, step7_end)
+
+            step_retry_end = datetime.now()
+            print_step_timing(f"GBSA 재시도 루프 ({retry_round}회)", step_retry_start, step_retry_end)
     else:
         now = datetime.now()
         if not RUN_RETRY:
-            print("\n[INFO] RUN_RETRY=False → 재시도 단계 스킵")
-        print_step_timing("STEP 7: 실패 복합체 재시도 (스킵)", now, now)
+            print("\n[INFO] RUN_RETRY=False → GBSA 재시도 루프 스킵")
+        print_step_timing("GBSA 재시도 루프 (스킵)", now, now)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # 이후 평가 단계: 모든 복합체가 GBSA 기준 통과 후 한 번만 실행
+    # ─────────────────────────────────────────────────────────────────────
+
+    # STEP 4: Vina
+    if RUN_VINA:
+        step4_start = datetime.now()
+        run_vina_on_rank1(rank1_pdbs, folders["vina"])
+        step4_end = datetime.now()
+        print_step_timing("STEP 4: AutoDock Vina 스코어링", step4_start, step4_end)
+        
+        # Vina 결과를 캐시에 업데이트
+        vina_scores, vina_statuses = load_vina_scores(folders["vina"])
+        update_cache_from_vina(results_cache, vina_scores, vina_statuses)
+        print(f"[INFO] Vina 점수 캐시 업데이트 완료 ({len(vina_scores)}개)")
+    else:
+        now = datetime.now()
+        print("\n[INFO] RUN_VINA=False → Vina 단계 스킵")
+        print_step_timing("STEP 4: AutoDock Vina 스코어링 (스킵)", now, now)
+
+    # STEP 4b: ADCP (보조 지표, FinalScore 미반영)
+    if RUN_ADCP:
+        step4b_start = datetime.now()
+
+        # .trg 파일 탐색: 환경변수 → BASE_DIR/target.trg → 워크스페이스/target.trg
+        trg_file = ADCP_TRG_FILE
+        if not trg_file or not Path(trg_file).exists():
+            for candidate in [BASE_DIR / "target.trg", folders["root"] / "target.trg"]:
+                if candidate.exists():
+                    trg_file = str(candidate)
+                    break
+
+        run_adcp_on_rank1(rank1_pdbs, folders["adcp"], Path(trg_file) if trg_file else None, peptides)
+        step4b_end = datetime.now()
+        print_step_timing("STEP 4b: ADCP 펩타이드 도킹", step4b_start, step4b_end)
+
+        # ADCP 결과를 캐시에 업데이트
+        adcp_scores, adcp_statuses = load_adcp_scores(folders["adcp"])
+        update_cache_from_adcp(results_cache, adcp_scores, adcp_statuses)
+        print(f"[INFO] ADCP 점수 캐시 업데이트 완료 ({len(adcp_scores)}개)")
+    else:
+        now = datetime.now()
+        print("\n[INFO] RUN_ADCP=0 → ADCP 단계 스킵")
+        print_step_timing("STEP 4b: ADCP 펩타이드 도킹 (스킵)", now, now)
+
+    # STEP 5: PLIP
+    if RUN_PLIP:
+        step5_start = datetime.now()
+        run_plip_on_rank1(rank1_pdbs, folders["plip"])
+        step5_end = datetime.now()
+        print_step_timing("STEP 5: PLIP 상호작용 분석", step5_start, step5_end)
+        
+        # PLIP 결과를 캐시에 업데이트
+        plip_scores, _ = load_plip_scores(folders["plip"])
+        update_cache_from_plip(results_cache, plip_scores)
+        print(f"[INFO] PLIP 점수 캐시 업데이트 완료 ({len(plip_scores)}개)")
+    else:
+        now = datetime.now()
+        print("\n[INFO] RUN_PLIP=False → PLIP 단계 스킵")
+        print_step_timing("STEP 5: PLIP 상호작용 분석 (스킵)", now, now)
+
+    # STEP 6: PRODIGY
+    if RUN_PRODIGY:
+        step6_start = datetime.now()
+        run_prodigy_on_rank1(rank1_pdbs, folders["prodigy"])
+        step6_end = datetime.now()
+        print_step_timing("STEP 6: PRODIGY 결합 친화도 평가", step6_start, step6_end)
+        
+        # PRODIGY 결과를 캐시에 업데이트
+        prodigy_scores, prodigy_statuses = load_prodigy_scores(folders["prodigy"])
+        update_cache_from_prodigy(results_cache, prodigy_scores, prodigy_statuses)
+        print(f"[INFO] PRODIGY 점수 캐시 업데이트 완료 ({len(prodigy_scores)}개)")
+    else:
+        now = datetime.now()
+        print("\n[INFO] RUN_PRODIGY=False → PRODIGY 단계 스킵")
+        print_step_timing("STEP 6: PRODIGY 결합 친화도 평가 (스킵)", now, now)
+
+    # ipTM 점수 로드 및 캐시 업데이트
+    iptm_scores = load_iptm_scores(folders["colabfold_out"], rank1_pdbs, folders["pdb"])
+    update_cache_from_iptm(results_cache, iptm_scores)
+    print(f"[INFO] ipTM 점수 캐시 업데이트 완료 ({len(iptm_scores)}개)")
 
     # ─────────────────────────────────────────────────────────────────────
     # STEP 8: 최종 결과 엑셀 및 PDB zip 생성
