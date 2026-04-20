@@ -177,7 +177,7 @@ RUN_RETRY = True  # 실패 복합체 자동 재시도 기능 활성화 여부
 # 13) ADCP (AutoDock CrankPep) 설정 — 보조 지표, FinalScore 미반영
 #     - ADCP 미설치 상태에서는 RUN_ADCP=0으로 유지
 #     - 설치 후 RUN_ADCP=1 및 .trg 파일 경로 설정
-RUN_ADCP = int(os.environ.get("RUN_ADCP", "1"))  # 0=비활성화, 1=활성화
+RUN_ADCP = int(os.environ.get("RUN_ADCP", "0"))  # 0=비활성화, 1=활성화
 ADCP_CMD = os.environ.get("ADCP_CMD", "adcp").strip()
 ADCP_NUM_STEPS = int(os.environ.get("ADCP_NUM_STEPS", "2500000"))  # MC 시뮬레이션 단계 수
 ADCP_NB_RUNS = int(os.environ.get("ADCP_NB_RUNS", "50"))           # 도킹 실행 횟수
