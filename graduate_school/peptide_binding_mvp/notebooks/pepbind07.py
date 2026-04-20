@@ -2700,22 +2700,31 @@ def prepare_adcp_receptor(complex_pdb: Path, adcp_dir: Path):
         return None
 
     # ── 2. prepare_receptor 로 PDBQT 변환 ──────────────────────────
+    # ADFRsuite 빌드에 따라 "-A hydrogens" 옵션이 없을 수 있어,
+    # 1차 시도 실패 시 옵션을 제거하고 재시도한다.
     prepare_exe = shutil.which("prepare_receptor") or "prepare_receptor"
     receptor_input = receptor_pdb
-    try:
-        res = subprocess.run(
-            [prepare_exe, "-r", str(receptor_pdb), "-o", str(prepared_pdbqt), "-A", "hydrogens"],
-            capture_output=True, text=True, timeout=180,
-        )
-        if prepared_pdbqt.exists():
-            print(f"  [INFO] prepare_receptor 완료: {prepared_pdbqt}")
-            receptor_input = prepared_pdbqt
-        else:
-            print(f"  [WARN] prepare_receptor 실패 (원본 PDB 사용): {res.stderr[:200]}")
-    except Exception as e:
-        print(f"  [WARN] prepare_receptor 실행 에러 (원본 PDB 사용): {e}")
+    prep_attempts = [
+        [prepare_exe, "-r", str(receptor_pdb), "-o", str(prepared_pdbqt), "-A", "hydrogens"],
+        [prepare_exe, "-r", str(receptor_pdb), "-o", str(prepared_pdbqt)],
+    ]
+    for idx, cmd in enumerate(prep_attempts, start=1):
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+            if prepared_pdbqt.exists():
+                print(f"  [INFO] prepare_receptor 완료 (시도 {idx}): {prepared_pdbqt}")
+                receptor_input = prepared_pdbqt
+                break
+            else:
+                print(f"  [WARN] prepare_receptor 시도 {idx} 실패: {res.stderr[:200]}")
+        except Exception as e:
+            print(f"  [WARN] prepare_receptor 시도 {idx} 실행 에러: {e}")
+    else:
+        print(f"  [WARN] prepare_receptor 전체 실패 → 원본 PDB로 AGFR 시도")
 
     # ── 3. AGFR 로 .trg 격자 파일 생성 ─────────────────────────────
+    # AGFR 빌드에 따라 출력 파일명이 "target.trg" 또는 "target_target.trg" 등
+    # 접두사가 두 번 붙는 경우가 있으므로, adcp_dir 내 *.trg 파일을 폴백 탐색한다.
     agfr_exe   = shutil.which(AGFR_CMD) or AGFR_CMD
     trg_prefix = adcp_dir / "target"
     try:
@@ -2724,14 +2733,20 @@ def prepare_adcp_receptor(complex_pdb: Path, adcp_dir: Path):
             [agfr_exe, "-r", str(receptor_input), "-o", str(trg_prefix), "--nogui"],
             capture_output=True, text=True, timeout=600,
         )
+        # 1순위: 기대 경로 (target.trg)
         if trg_out.exists():
             print(f"  [INFO] .trg 파일 생성 완료: {trg_out}")
             return trg_out
-        else:
-            print(f"  [WARN] agfr .trg 생성 실패")
-            if res.stdout: print(f"         stdout: {res.stdout[-300:]}")
-            if res.stderr: print(f"         stderr: {res.stderr[-300:]}")
-            return None
+        # 2순위: adcp_dir 내 생성된 임의의 *.trg 파일 탐색
+        trg_candidates = sorted(adcp_dir.glob("*.trg"))
+        if trg_candidates:
+            fallback = trg_candidates[0]
+            print(f"  [INFO] .trg 파일 생성 완료 (폴백 탐색): {fallback}")
+            return fallback
+        print(f"  [WARN] agfr .trg 생성 실패")
+        if res.stdout: print(f"         stdout: {res.stdout[-300:]}")
+        if res.stderr: print(f"         stderr: {res.stderr[-300:]}")
+        return None
     except Exception as e:
         print(f"  [ERROR] AGFR 실행 실패: {e}")
         return None
@@ -4869,7 +4884,12 @@ def main():
         if (not trg_file or not Path(trg_file).exists()) and ADCP_AUTO_PREPARE:
             print("\n[INFO] .trg 파일 없음 → ColabFold 복합체 PDB에서 자동 생성 시도")
             if rank1_pdbs:
-                first_pdb = Path(next(iter(rank1_pdbs.values())))
+                # rank1_pdbs는 list(Path)가 기본 반환 형태이지만,
+                # 혹시 dict 형태로 들어올 경우도 안전하게 첫 번째 PDB를 가져온다
+                if isinstance(rank1_pdbs, dict):
+                    first_pdb = Path(next(iter(rank1_pdbs.values())))
+                else:
+                    first_pdb = Path(rank1_pdbs[0])
                 if first_pdb.exists():
                     generated = prepare_adcp_receptor(first_pdb, folders["adcp"])
                     if generated:
