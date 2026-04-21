@@ -112,7 +112,13 @@ VINA_CMD        = os.environ.get("VINA_CMD", "vina").strip()
 PLIP_CMD        = os.environ.get("PLIP_CMD", "plip").strip()          # 기본값도 plip으로
 PRODIGY_SCRIPT  = os.environ.get("PRODIGY_SCRIPT", "prodigy").strip()
 
-OBABEL_CMD = shutil.which("obabel") or "obabel"
+# obabel: conda 환경의 최신 버전 우선 사용 (ADFRsuite v2.4.1 충돌 방지)
+_conda_prefix = os.environ.get("CONDA_PREFIX", "")
+_conda_obabel = os.path.join(_conda_prefix, "bin", "obabel") if _conda_prefix else ""
+if _conda_obabel and os.path.isfile(_conda_obabel):
+    OBABEL_CMD = _conda_obabel
+else:
+    OBABEL_CMD = shutil.which("obabel") or "obabel"
 
 # 6) ColabFold 자원/안전 관련 설정
 #    - COLABFOLD_MAX_MSA: MSA 깊이 제한 (메모리 부족 시 더 낮게 조정, 기본: 32:64)
@@ -2728,9 +2734,9 @@ def prepare_adcp_receptor(complex_pdb: Path, adcp_dir: Path):
     agfr_exe   = shutil.which(AGFR_CMD) or AGFR_CMD
     trg_prefix = adcp_dir / "target"
     try:
-        print(f"  [RUN] {agfr_exe} -r {receptor_input} -o {trg_prefix} --nogui")
+        print(f"  [RUN] {agfr_exe} -r {receptor_input} -o {trg_prefix} -ng")
         res = subprocess.run(
-            [agfr_exe, "-r", str(receptor_input), "-o", str(trg_prefix), "--nogui"],
+            [agfr_exe, "-r", str(receptor_input), "-o", str(trg_prefix), "-ng"],
             capture_output=True, text=True, timeout=600,
         )
         # 1순위: 기대 경로 (target.trg)
