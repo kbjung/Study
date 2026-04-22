@@ -2337,15 +2337,32 @@ def parse_vina_score_from_stdout(stdout: str):
     """
     AutoDock Vina stdout에서 score(affinity, kcal/mol)를 파싱.
 
-    score_only 모드 출력 형식:
-        Affinity: -7.5 (kcal/mol)
+    지원 출력 형식:
+        [Vina 1.2.x 공식]           Affinity: -7.5 (kcal/mol)
+        [Vina 1.2.x mod build]      Estimated Free Energy of Binding   : -4.010 (kcal/mol) [=(1)+(2)+(3)-(4)]
+        [Vina 1.1.x 도킹 모드]      mode |   affinity ...  (표 형식)
+        [PDBQT REMARK]              REMARK VINA RESULT: ...
 
     우선순위:
-    1) score_only 모드: 'Affinity:' 줄에서 파싱
-    2) fallback: mode 테이블 파싱 (도킹 모드 호환)
-    3) fallback: 'REMARK VINA RESULT' 형식
+    1) 'Estimated Free Energy of Binding' 줄 (mod build score_only)
+    2) 'Affinity:' 줄 (공식 score_only)
+    3) fallback: mode 테이블 파싱 (도킹 모드 호환)
+    4) fallback: 'REMARK VINA RESULT' 형식
     """
-    # 1) score_only 모드 파싱: "Affinity: -7.5 (kcal/mol)"
+    # 1) Vina 1.2.x mod build score_only:
+    #    "Estimated Free Energy of Binding   : -4.010 (kcal/mol) [=(1)+(2)+(3)-(4)]"
+    for line in stdout.splitlines():
+        s = line.strip()
+        if s.startswith("Estimated Free Energy of Binding"):
+            # 콜론 이후 첫 번째 float가 점수
+            after_colon = s.split(":", 1)[1] if ":" in s else s
+            for token in after_colon.replace("(", " ").replace(")", " ").split():
+                try:
+                    return float(token)
+                except ValueError:
+                    continue
+
+    # 2) Vina 1.2.x 공식 score_only 파싱: "Affinity: -7.5 (kcal/mol)"
     for line in stdout.splitlines():
         s = line.strip()
         if s.startswith("Affinity:"):
@@ -2355,7 +2372,7 @@ def parse_vina_score_from_stdout(stdout: str):
                 except ValueError:
                     continue
 
-    # 2) fallback: mode 테이블 파싱 (도킹 모드 호환)
+    # 3) fallback: mode 테이블 파싱 (도킹 모드 호환)
     energies = []
     for line in stdout.splitlines():
         s = line.strip()
@@ -2907,28 +2924,44 @@ def run_adcp_on_rank1(
         complex_out_dir.mkdir(parents=True, exist_ok=True)
         log_file = complex_out_dir / f"{base}_adcp.log"
 
-        # ADCP 명령어 구성
+        # ── ADCP를 complex_out_dir 에서 직접 실행 ────────────────────
+        # ADCP 내부는 `./tmp_<jobName>/` 에 .trg를 풀고,
+        # 종료 시 `./tmp_<jobName>/<trg_basename>/translationPoints.npy` 를
+        # `os.getcwd()` 로 복사한다. 절대경로 -t/-o 를 쓰면 경로 조합이
+        # 깨져서 IOError(translationPoints.npy 없음)가 발생하므로,
+        # cwd = complex_out_dir 로 고정하고 .trg 심볼릭 링크(복사 폴백)를
+        # 로컬에 두어 상대 경로만 전달한다.
+        local_trg = complex_out_dir / "target.trg"
+        if not local_trg.exists():
+            try:
+                os.symlink(Path(trg_file).resolve(), local_trg)
+            except (OSError, NotImplementedError):
+                # 심볼릭 링크 실패 시 복사 (WSL 등에서 링크 권한 없는 경우)
+                shutil.copy2(trg_file, local_trg)
+
+        # ADCP 명령어 구성 (모두 상대 경로 → cwd에서 해석)
         # -t: 타겟 파일, -s: 펩타이드 서열, -N: 실행 횟수, -n: MC 단계 수
         adcp_cmd = [
             ADCP_CMD,
-            "-t", str(trg_file),
+            "-t", "target.trg",
             "-s", pep_seq,
             "-N", str(ADCP_NB_RUNS),
             "-n", str(ADCP_NUM_STEPS),
-            "-o", str(complex_out_dir / f"{base}_adcp"),
+            "-o", f"{base}_adcp",
         ]
 
         # CPU 코어 제한 (--maxCores 옵션 지원 시)
         if ADCP_MAX_CORES > 0:
             adcp_cmd.extend(["--maxCores", str(ADCP_MAX_CORES)])
 
-        print(f"\n[RUN] {' '.join(adcp_cmd)}")
+        print(f"\n[RUN] (cwd={complex_out_dir}) {' '.join(adcp_cmd)}")
         result = subprocess.run(
             adcp_cmd,
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
+            cwd=str(complex_out_dir),
         )
 
         # stdout/stderr 로그 저장
