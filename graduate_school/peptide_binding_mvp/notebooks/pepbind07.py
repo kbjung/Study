@@ -2548,11 +2548,29 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
         row_data["receptor_pdbqt"] = rec_pdbqt.name
         row_data["ligand_pdbqt"] = lig_pdbqt.name
 
+        # 5) 리간드 좌표 기반 grid box 자동 계산 (score_only에서도 필수)
+        try:
+            box = compute_box_from_ligand(lig_pdb, padding=10.0)
+        except Exception as e:
+            status = f"스킵: 리간드 grid box 계산 실패({e})"
+            print(f"[WARN] {complex_pdb.name} {status}")
+            log_file.write_text(status + "\n", encoding="utf-8")
+            row_data["vina_status"] = status
+            summary_rows.append(row_data)
+            debug_lines.append(f"{base}\t{status}\tlog={log_file.name}")
+            continue
+
         # score_only 모드: 포즈 탐색 없이 현재 구조의 결합 에너지만 평가
         vina_cmd = (
             f"{VINA_CMD} "
             f"--receptor {rec_pdbqt} "
             f"--ligand {lig_pdbqt} "
+            f"--center_x {box['center_x']:.4f} "
+            f"--center_y {box['center_y']:.4f} "
+            f"--center_z {box['center_z']:.4f} "
+            f"--size_x {box['size_x']:.4f} "
+            f"--size_y {box['size_y']:.4f} "
+            f"--size_z {box['size_z']:.4f} "
             f"--score_only"
         )
 
@@ -2890,11 +2908,11 @@ def run_adcp_on_rank1(
         log_file = complex_out_dir / f"{base}_adcp.log"
 
         # ADCP 명령어 구성
-        # -T: 타겟 파일, -S: 펩타이드 서열, -N: 실행 횟수, -n: MC 단계 수
+        # -t: 타겟 파일, -s: 펩타이드 서열, -N: 실행 횟수, -n: MC 단계 수
         adcp_cmd = [
             ADCP_CMD,
-            "-T", str(trg_file),
-            "-S", pep_seq,
+            "-t", str(trg_file),
+            "-s", pep_seq,
             "-N", str(ADCP_NB_RUNS),
             "-n", str(ADCP_NUM_STEPS),
             "-o", str(complex_out_dir / f"{base}_adcp"),
