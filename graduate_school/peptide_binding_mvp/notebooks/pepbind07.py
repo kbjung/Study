@@ -93,7 +93,7 @@ TARGET_SEQUENCE = (
 #    - NUM_PEPTIDES: 생성할 후보 개수
 #    - PEPTIDE_LENGTH: 각 후보의 펩타이드 길이(아미노산 개수)
 NUM_PEPTIDES   = 5
-PEPTIDE_LENGTH = 4
+PEPTIDE_LENGTH = 5
 
 # 3) 파이프라인 단계 실행 여부 (True/False)
 #    - 각 단계별로 실행/스킵을 쉽게 제어하기 위한 스위치
