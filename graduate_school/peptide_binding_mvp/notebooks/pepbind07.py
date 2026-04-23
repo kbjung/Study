@@ -2921,7 +2921,7 @@ def parse_adcp_best_energy(log_text: str):
     """
     ADCP 실행 stdout/log에서 최적 결합 에너지(kcal/mol)를 파싱.
 
-    ADCP 출력 형식 예시:
+    ADCP 출력 형식 예시 (정상 완주 시):
         best energy: -7.5
         LowestEne  -6.32
         Best Score: -8.1 kcal/mol
@@ -2975,6 +2975,55 @@ def parse_adcp_best_energy(log_text: str):
     return None
 
 
+def parse_adcp_partial_best_from_out_files(out_dir: Path):
+    """
+    ADCP crankpep 바이너리가 세그폴트로 죽어 정상 클러스터링/스코어 파싱이
+    불가능할 때, 각 `_adcp_<N>.out` 파일의 MC 궤적에서 달성된 best 에너지를
+    추출해 전 run 중 최저값을 반환.
+
+    `_adcp_N.out` 포맷 예:
+        swap in best curr 487.258 swap 9999 best 99999
+        swap between best curr 470.624 swap 487.258 best 470.624
+        ...
+        Segmentation fault (core dumped)
+
+    99999 는 초기 sentinel 값이므로 제외. 양수여도 MC 궤적의 최저값을 그대로
+    반환 (실제 결합 에너지가 아니라 '세그폴트 직전까지 도달한 최저 에너지').
+
+    Returns:
+        (best_value: float | None, run_count_parsed: int, run_count_had_data: int)
+    """
+    best_value = None
+    parsed_files = 0
+    files_with_data = 0
+    # 예: "swap between best curr 27.4962 swap 30.0166 best 27.4962"
+    # 마지막 토큰 'best <X>' 만 취한다.
+    pat = re.compile(r"best\s+(-?\d+(?:\.\d+)?)\s*$", re.MULTILINE)
+
+    for fp in sorted(out_dir.glob("*_adcp_*.out")):
+        parsed_files += 1
+        try:
+            text = fp.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        run_best = None
+        for m in pat.finditer(text):
+            try:
+                val = float(m.group(1))
+            except ValueError:
+                continue
+            # 99999 sentinel 제외
+            if val >= 99998.0:
+                continue
+            if run_best is None or val < run_best:
+                run_best = val
+        if run_best is not None:
+            files_with_data += 1
+            if best_value is None or run_best < best_value:
+                best_value = run_best
+    return best_value, parsed_files, files_with_data
+
+
 def run_adcp_on_rank1(
     rank1_pdbs: list,
     adcp_dir: Path,
@@ -3013,6 +3062,14 @@ def run_adcp_on_rank1(
         print("       AGFR로 타겟 .trg 파일을 먼저 준비하세요.")
         return
 
+    # ADCP crankpep 바이너리는 4-mer 이하 펩타이드에서 세그폴트를 일으키는
+    # 알려진 버그가 있음. 5-mer 이상을 권장.
+    short_peps = [p for p in peptides if p and len(p) < 5]
+    if short_peps:
+        print(f"[WARN] 펩타이드 길이 4 이하 발견: {short_peps}")
+        print("       ADCP crankpep 바이너리는 4-mer 이하에서 세그폴트가 발생할 수 있습니다.")
+        print("       PEPTIDE_LENGTH >= 5 설정 또는 ADFRsuite 1.1 이상 업그레이드를 권장합니다.")
+
     adcp_dir.mkdir(parents=True, exist_ok=True)
     summary_rows = []
     debug_lines = []
@@ -3031,6 +3088,16 @@ def run_adcp_on_rank1(
         if not pep_seq:
             status = "스킵: 펩타이드 서열 매핑 실패"
             print(f"[WARN] {base} {status}")
+            summary_rows.append({"complex": base, "adcp_status": status, "adcp_score": None})
+            debug_lines.append(f"{base}\t{status}")
+            continue
+
+        # 4-mer 이하 펩타이드는 ADCP crankpep 바이너리에서 segfault 발생 (1.0/1.1 공통).
+        # 50회 시도해도 모두 실패하므로 시간 낭비를 막기 위해 즉시 스킵.
+        if len(pep_seq) < 5:
+            status = (f"스킵: {len(pep_seq)}-mer 펩타이드(crankpep 세그폴트). "
+                      f"PEPTIDE_LENGTH>=5 권장")
+            print(f"[WARN] {base} {pep_seq} ({len(pep_seq)}-mer) → {status}")
             summary_rows.append({"complex": base, "adcp_status": status, "adcp_score": None})
             debug_lines.append(f"{base}\t{status}")
             continue
@@ -3069,15 +3136,45 @@ def run_adcp_on_rank1(
         if ADCP_MAX_CORES > 0:
             adcp_cmd.extend(["--maxCores", str(ADCP_MAX_CORES)])
 
-        print(f"\n[RUN] (cwd={complex_out_dir}) {' '.join(adcp_cmd)}")
-        result = subprocess.run(
-            adcp_cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=str(complex_out_dir),
-        )
+        def _run_adcp(cmd, cwd):
+            print(f"\n[RUN] (cwd={cwd}) {' '.join(cmd)}")
+            return subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                cwd=str(cwd),
+            )
+
+        result = _run_adcp(adcp_cmd, complex_out_dir)
+
+        # 1차 실패 시, 병렬/단계수 줄인 보수적 파라미터로 한 번 더 시도
+        # (ADFRsuite crankpep 바이너리의 race/메모리 버그 회피 목적).
+        if result.returncode != 0:
+            print(f"[WARN] {base} 1차 ADCP 실패(code={result.returncode}). "
+                  f"보수적 파라미터로 재시도.")
+            # 이전 산출물 정리 (tmp_, *_adcp_*.out/.pdb, 등)
+            for pat in ("tmp_*", "*_adcp_*.out", "*_adcp_*.pdb", "*_adcp.pdb"):
+                for f in complex_out_dir.glob(pat):
+                    try:
+                        if f.is_dir():
+                            shutil.rmtree(f, ignore_errors=True)
+                        else:
+                            f.unlink()
+                    except OSError:
+                        pass
+
+            safe_cmd = [
+                ADCP_CMD,
+                "-t", "target.trg",
+                "-s", pep_seq,
+                "-N", "1",
+                "-n", str(min(ADCP_NUM_STEPS, 500000)),
+                "-o", f"{base}_adcp",
+                "--maxCores", "1",
+            ]
+            result = _run_adcp(safe_cmd, complex_out_dir)
 
         # stdout/stderr 로그 저장
         with open(log_file, "w", encoding="utf-8") as lf:
@@ -3089,23 +3186,17 @@ def run_adcp_on_rank1(
         best_score = None
         status = ""
 
-        if result.returncode != 0:
-            status = f"실패: ADCP 실행 에러(code={result.returncode})"
-            print(f"[ERROR] {status}. 로그: {log_file}")
-            print((result.stderr or "")[:300])
-            debug_lines.append(f"{base}\t{status}\tlog={log_file.name}")
-        else:
-            # stdout + summary/dlg 파일에서 에너지 파싱
+        if result.returncode == 0:
+            # 정상 완주: 공식 출력 파일에서 에너지 파싱
             combined_text = result.stdout or ""
-
-            # ADCP 출력 파일(summary.dlg, *_out.pdb 등)에서도 에너지 탐색
             for ext in ("*.dlg", "*_summary*", "*_out.pdb"):
                 for f in complex_out_dir.glob(ext):
                     try:
-                        combined_text += "\n" + f.read_text(encoding="utf-8", errors="ignore")
+                        combined_text += "\n" + f.read_text(
+                            encoding="utf-8", errors="ignore"
+                        )
                     except Exception:
                         pass
-
             best_score = parse_adcp_best_energy(combined_text)
             if best_score is None:
                 status = "파싱실패: ADCP 출력에서 에너지 패턴 없음"
@@ -3115,6 +3206,31 @@ def run_adcp_on_rank1(
                 status = "정상"
                 print(f"[INFO] {base} ADCP best energy: {best_score:.2f} kcal/mol")
                 debug_lines.append(f"{base}\t{status}\t{best_score}")
+        else:
+            # 정상 종료 실패(세그폴트 등) → `_adcp_<N>.out` MC 궤적에서 부분 파싱
+            partial, n_files, n_with_data = parse_adcp_partial_best_from_out_files(
+                complex_out_dir
+            )
+            if partial is not None and partial < 0:
+                # 음수 에너지만 의미있는 결합 에너지로 취급
+                best_score = partial
+                status = (f"부분파싱: crankpep 세그폴트 (code={result.returncode}), "
+                          f"MC 최저에너지={partial:.2f} kcal/mol, "
+                          f"runs={n_with_data}/{n_files}")
+                print(f"[WARN] {base} {status}")
+                debug_lines.append(f"{base}\t{status}\t{partial}")
+            elif partial is not None:
+                # 양수 에너지 = MC가 수렴 전에 세그폴트 → 무의미한 값, 스코어 미기록
+                status = (f"세그폴트(미완성): crankpep code={result.returncode}, "
+                          f"MC 미수렴(최저={partial:.2f}>0), runs={n_with_data}/{n_files}. "
+                          f"ADFRsuite≥1.1 또는 PEPTIDE_LENGTH≥5 권장")
+                print(f"[WARN] {base} {status}")
+                debug_lines.append(f"{base}\t{status}\tlog={log_file.name}")
+            else:
+                status = f"실패: ADCP 실행 에러(code={result.returncode})"
+                print(f"[ERROR] {status}. 로그: {log_file}")
+                print((result.stderr or "")[:300])
+                debug_lines.append(f"{base}\t{status}\tlog={log_file.name}")
 
         summary_rows.append({
             "complex": base,
