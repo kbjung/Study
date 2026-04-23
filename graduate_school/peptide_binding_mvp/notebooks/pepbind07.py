@@ -192,6 +192,16 @@ ADCP_MAX_CORES = int(os.environ.get("ADCP_MAX_CORES", "4"))        # 최대 CPU 
 ADCP_TRG_FILE = os.environ.get("ADCP_TRG_FILE", "").strip()        # .trg 파일 경로 (미설정 시 자동 생성)
 ADCP_AUTO_PREPARE = int(os.environ.get("ADCP_AUTO_PREPARE", "1"))  # 1=.trg 자동 생성, 0=수동 지정만
 
+# ADCP 짧은 펩타이드(4-mer 이하) 처리 전략
+# crankpep 바이너리가 ≤4-mer에서 segfault를 일으키므로 ADFRsuite 1.0/1.1 공통 우회 필요.
+#   "pad_c": C-말단에 glycine(G) 추가해 5-mer로 만들어 실행 (기본값)
+#   "pad_n": N-말단에 glycine(G) 추가해 5-mer로 만들어 실행
+#   "skip" : 4-mer 이하는 ADCP 자체를 스킵 (ADCP_score 빈 값)
+# 패딩된 스코어는 원본 서열의 ADCP 점수와 완전히 동일하지 않음을 유의
+# (엑셀에 ADCP_padded / ADCP_seq_used 컬럼으로 표기됨).
+ADCP_SHORT_PEP_STRATEGY = os.environ.get("ADCP_SHORT_PEP_STRATEGY", "pad_c").strip().lower()
+ADCP_MIN_LENGTH = int(os.environ.get("ADCP_MIN_LENGTH", "5"))      # crankpep 안정 동작 최소 길이
+
 
 # =====================================================================
 # === 공통 설정 / 유틸 =================================================
@@ -250,6 +260,8 @@ RANK_TABLE_HEADERS = [
     "ipTM",
     "GBSA_bind",
     "ADCP_score(kcal/mol)",
+    "ADCP_padded",
+    "ADCP_seq_used",
 ]
 
 ALL_METRICS_HEADERS = [
@@ -275,6 +287,8 @@ ALL_METRICS_HEADERS = [
     "GBSA_E_peptide(kcal/mol)",
     "GBSA_bind",
     "ADCP_score(kcal/mol)",
+    "ADCP_padded",
+    "ADCP_seq_used",
 ]
 
 NORM_DEBUG_HEADERS = [
@@ -339,6 +353,8 @@ def init_results_cache(peptides: list) -> dict:
             "retry_round": 0,  # 0 = 초기 실행, 1,2,3 = 재시도 라운드
             "adcp_score": None,
             "adcp_status": None,
+            "adcp_padded": False,
+            "adcp_seq_used": "",
         }
     return cache
 
@@ -2914,7 +2930,45 @@ ADCP_SUMMARY_COLS = [
     "complex",
     "adcp_status",
     "adcp_score",
+    "adcp_padded",      # bool: 4-mer 이하 펩타이드에 glycine 패딩 적용 여부
+    "adcp_seq_used",    # str: 실제 ADCP에 전달된 서열 (패딩 포함)
 ]
+
+
+def pad_peptide_for_adcp(pep_seq: str,
+                          min_len: int = 5,
+                          strategy: str = "pad_c") -> tuple:
+    """
+    짧은 펩타이드(<min_len)에 glycine(G) 패딩을 적용해 crankpep 안정 동작 영역으로 확장.
+
+    Args:
+        pep_seq: 원본 펩타이드 서열
+        min_len: ADCP가 안정적으로 동작하는 최소 길이 (기본 5)
+        strategy: "pad_c" = C-말단에 G 추가, "pad_n" = N-말단에 G 추가
+
+    Returns:
+        (padded_seq, n_pads, pad_side)
+            padded_seq: 패딩된 서열 (길이 ≥ min_len)
+            n_pads   : 추가된 G 개수 (0이면 패딩 불필요)
+            pad_side : "c" | "n" | "none"
+
+    예:
+        pad_peptide_for_adcp("TSEE", 5, "pad_c") -> ("TSEEG", 1, "c")
+        pad_peptide_for_adcp("AB",   5, "pad_n") -> ("GGGAB", 3, "n")
+        pad_peptide_for_adcp("KLRPV", 5, "pad_c") -> ("KLRPV", 0, "none")
+
+    주의:
+        패딩된 서열로 얻은 ADCP 스코어는 원본 4-mer의 결합 에너지와 완전히
+        동일하지 않음. 추가된 G의 backbone이 공간을 차지해 포즈/에너지에
+        영향을 줄 수 있음 (대개 ±0.5 kcal/mol 수준).
+    """
+    if len(pep_seq) >= min_len:
+        return pep_seq, 0, "none"
+    n_pad = min_len - len(pep_seq)
+    if strategy == "pad_n":
+        return "G" * n_pad + pep_seq, n_pad, "n"
+    # default: pad_c
+    return pep_seq + "G" * n_pad, n_pad, "c"
 
 
 def parse_adcp_best_energy(log_text: str):
@@ -3088,19 +3142,41 @@ def run_adcp_on_rank1(
         if not pep_seq:
             status = "스킵: 펩타이드 서열 매핑 실패"
             print(f"[WARN] {base} {status}")
-            summary_rows.append({"complex": base, "adcp_status": status, "adcp_score": None})
+            summary_rows.append({
+                "complex": base, "adcp_status": status, "adcp_score": None,
+                "adcp_padded": False, "adcp_seq_used": "",
+            })
             debug_lines.append(f"{base}\t{status}")
             continue
 
-        # 4-mer 이하 펩타이드는 ADCP crankpep 바이너리에서 segfault 발생 (1.0/1.1 공통).
-        # 50회 시도해도 모두 실패하므로 시간 낭비를 막기 위해 즉시 스킵.
-        if len(pep_seq) < 5:
-            status = (f"스킵: {len(pep_seq)}-mer 펩타이드(crankpep 세그폴트). "
-                      f"PEPTIDE_LENGTH>=5 권장")
-            print(f"[WARN] {base} {pep_seq} ({len(pep_seq)}-mer) → {status}")
-            summary_rows.append({"complex": base, "adcp_status": status, "adcp_score": None})
-            debug_lines.append(f"{base}\t{status}")
-            continue
+        # 4-mer 이하 펩타이드 처리 (crankpep 바이너리 segfault 우회).
+        # ADCP_SHORT_PEP_STRATEGY 에 따라 glycine 패딩 적용 또는 스킵.
+        original_pep = pep_seq
+        padded_flag = False
+        pad_side = "none"
+        n_pad = 0
+
+        if len(pep_seq) < ADCP_MIN_LENGTH:
+            if ADCP_SHORT_PEP_STRATEGY in ("pad_c", "pad_n"):
+                pep_seq, n_pad, pad_side = pad_peptide_for_adcp(
+                    original_pep,
+                    min_len=ADCP_MIN_LENGTH,
+                    strategy=ADCP_SHORT_PEP_STRATEGY,
+                )
+                padded_flag = True
+                print(f"[INFO] {base} {original_pep} ({len(original_pep)}-mer) "
+                      f"→ G 패딩 적용: {pep_seq} ({pad_side}-말단 +{n_pad}G, "
+                      f"strategy={ADCP_SHORT_PEP_STRATEGY})")
+            else:  # "skip" 또는 알 수 없는 값
+                status = (f"스킵: {len(pep_seq)}-mer 펩타이드(crankpep 세그폴트). "
+                          f"ADCP_SHORT_PEP_STRATEGY=pad_c 사용 권장")
+                print(f"[WARN] {base} {pep_seq} ({len(pep_seq)}-mer) → {status}")
+                summary_rows.append({
+                    "complex": base, "adcp_status": status, "adcp_score": None,
+                    "adcp_padded": False, "adcp_seq_used": original_pep,
+                })
+                debug_lines.append(f"{base}\t{status}")
+                continue
 
         complex_out_dir = adcp_dir / base
         complex_out_dir.mkdir(parents=True, exist_ok=True)
@@ -3232,10 +3308,16 @@ def run_adcp_on_rank1(
                 print((result.stderr or "")[:300])
                 debug_lines.append(f"{base}\t{status}\tlog={log_file.name}")
 
+        # 패딩 적용된 경우 status에 표시 추가 (사용자 가시성)
+        if padded_flag:
+            status = f"{status} [padded:{original_pep}->{pep_seq}]"
+
         summary_rows.append({
             "complex": base,
             "adcp_status": status,
             "adcp_score": best_score,
+            "adcp_padded": padded_flag,
+            "adcp_seq_used": pep_seq,
         })
 
     # adcp_summary.xlsx 저장
@@ -3275,35 +3357,41 @@ def run_adcp_on_rank1(
 
 def load_adcp_scores(adcp_dir: Path):
     """
-    adcp_summary.xlsx에서 complex별 ADCP score와 상태를 로딩.
+    adcp_summary.xlsx에서 complex별 ADCP score와 상태, 패딩 정보를 로딩.
 
     Returns:
-        scores: dict[complex_id] = float 또는 None
+        scores:   dict[complex_id] = float 또는 None
         statuses: dict[complex_id] = 상태 문자열
+        padded:   dict[complex_id] = bool (4-mer 이하 glycine 패딩 여부)
+        seq_used: dict[complex_id] = str (실제 ADCP에 전달된 서열)
     """
     scores = {}
     statuses = {}
+    padded = {}
+    seq_used = {}
 
     if not adcp_dir or not adcp_dir.exists():
-        return scores, statuses
+        return scores, statuses, padded, seq_used
 
     summary_xlsx = adcp_dir / "adcp_summary.xlsx"
     if not summary_xlsx.exists():
         print("[WARN] adcp_summary.xlsx를 찾지 못했습니다:", adcp_dir)
-        return scores, statuses
+        return scores, statuses, padded, seq_used
 
     try:
         df = pd.read_excel(summary_xlsx)
         print(f"[INFO] ADCP 요약 엑셀에서 점수 로드: {summary_xlsx}")
     except Exception as e:
         print(f"[WARN] ADCP 엑셀 로딩 실패: {e}")
-        return scores, statuses
+        return scores, statuses, padded, seq_used
 
     if "complex" not in df.columns:
         print("[WARN] ADCP summary 데이터프레임에 'complex' 컬럼이 없습니다.")
-        return scores, statuses
+        return scores, statuses, padded, seq_used
 
-    has_status = "adcp_status" in df.columns
+    has_status  = "adcp_status"  in df.columns
+    has_padded  = "adcp_padded"  in df.columns
+    has_seqused = "adcp_seq_used" in df.columns
 
     for _, row in df.iterrows():
         base = row.get("complex")
@@ -3328,14 +3416,30 @@ def load_adcp_scores(adcp_dir: Path):
         else:
             statuses[base] = "정상" if scores[base] is not None else "미기록"
 
+        if has_padded:
+            p = row.get("adcp_padded")
+            padded[base] = bool(p) if not pd.isna(p) else False
+        else:
+            padded[base] = False
+
+        if has_seqused:
+            s = row.get("adcp_seq_used")
+            seq_used[base] = "" if pd.isna(s) else str(s)
+        else:
+            seq_used[base] = ""
+
     print(f"[INFO] ADCP 점수를 읽어온 구조 수: {len(scores)}")
-    return scores, statuses
+    return scores, statuses, padded, seq_used
 
 
-def update_cache_from_adcp(cache: dict, adcp_scores: dict, adcp_statuses: dict):
+def update_cache_from_adcp(cache: dict, adcp_scores: dict, adcp_statuses: dict,
+                            adcp_padded: dict = None, adcp_seq_used: dict = None):
     """
-    ADCP 점수를 캐시에 업데이트.
+    ADCP 점수/패딩 정보를 캐시에 업데이트.
     """
+    adcp_padded = adcp_padded or {}
+    adcp_seq_used = adcp_seq_used or {}
+
     for complex_id, data in cache.items():
         pdb_path = data.get("pdb_path")
         if not pdb_path:
@@ -3343,12 +3447,17 @@ def update_cache_from_adcp(cache: dict, adcp_scores: dict, adcp_statuses: dict):
 
         base = pdb_path.stem if hasattr(pdb_path, 'stem') else str(pdb_path)
 
+        key = None
         if base in adcp_scores:
-            cache[complex_id]["adcp_score"] = adcp_scores[base]
-            cache[complex_id]["adcp_status"] = adcp_statuses.get(base, "정상")
+            key = base
         elif complex_id in adcp_scores:
-            cache[complex_id]["adcp_score"] = adcp_scores[complex_id]
-            cache[complex_id]["adcp_status"] = adcp_statuses.get(complex_id, "정상")
+            key = complex_id
+
+        if key is not None:
+            cache[complex_id]["adcp_score"]     = adcp_scores[key]
+            cache[complex_id]["adcp_status"]    = adcp_statuses.get(key, "정상")
+            cache[complex_id]["adcp_padded"]    = adcp_padded.get(key, False)
+            cache[complex_id]["adcp_seq_used"]  = adcp_seq_used.get(key, "")
 
 
 # =====================================================================
@@ -4288,10 +4397,14 @@ def build_and_save_final_table(
                 w_iptm    * iptm_norm.get(base, 0.0)
             )
 
-        # ADCP 점수 (캐시에서 가져오기)
+        # ADCP 점수 (캐시에서 가져오기) + 패딩 정보
         adcp_score_val = None
+        adcp_padded_val = False
+        adcp_seq_used_val = ""
         if results_cache and candidate_id in results_cache:
-            adcp_score_val = results_cache[candidate_id].get("adcp_score")
+            adcp_score_val    = results_cache[candidate_id].get("adcp_score")
+            adcp_padded_val   = results_cache[candidate_id].get("adcp_padded", False)
+            adcp_seq_used_val = results_cache[candidate_id].get("adcp_seq_used", "") or ""
 
         rows.append({
             "candidate_id":     candidate_id,
@@ -4315,6 +4428,8 @@ def build_and_save_final_table(
             "gbsa_e_peptide":   gbsa_e_peptide,
             "gbsa_bind":        gbsa_bind,
             "adcp_score":       adcp_score_val,
+            "adcp_padded":      adcp_padded_val,
+            "adcp_seq_used":    adcp_seq_used_val,
             "retry_round":      retry_round,
             "complex_stem":     base,
         })
@@ -4361,6 +4476,8 @@ def build_and_save_final_table(
         "ipTM": lambda r, idx: r["iptm"],
         "GBSA_bind": lambda r, idx: r.get("gbsa_bind"),
         "ADCP_score(kcal/mol)": lambda r, idx: r.get("adcp_score"),
+        "ADCP_padded":   lambda r, idx: bool(r.get("adcp_padded", False)),
+        "ADCP_seq_used": lambda r, idx: r.get("adcp_seq_used", "") or "",
     }
 
     for idx, r in enumerate(rows, start=1):
@@ -4404,6 +4521,8 @@ def build_and_save_final_table(
         "GBSA_E_peptide(kcal/mol)": lambda r, idx: r.get("gbsa_e_peptide"),
         "GBSA_bind": lambda r, idx: r.get("gbsa_bind"),
         "ADCP_score(kcal/mol)": lambda r, idx: r.get("adcp_score"),
+        "ADCP_padded":   lambda r, idx: bool(r.get("adcp_padded", False)),
+        "ADCP_seq_used": lambda r, idx: r.get("adcp_seq_used", "") or "",
     }
 
     for idx, r in enumerate(rows, start=1):
@@ -5195,8 +5314,11 @@ def main():
         print_step_timing("STEP 4b: ADCP 펩타이드 도킹", step4b_start, step4b_end)
 
         # ADCP 결과를 캐시에 업데이트
-        adcp_scores, adcp_statuses = load_adcp_scores(folders["adcp"])
-        update_cache_from_adcp(results_cache, adcp_scores, adcp_statuses)
+        adcp_scores, adcp_statuses, adcp_padded, adcp_seq_used = load_adcp_scores(folders["adcp"])
+        update_cache_from_adcp(
+            results_cache, adcp_scores, adcp_statuses,
+            adcp_padded=adcp_padded, adcp_seq_used=adcp_seq_used,
+        )
         print(f"[INFO] ADCP 점수 캐시 업데이트 완료 ({len(adcp_scores)}개)")
     else:
         now = datetime.now()
