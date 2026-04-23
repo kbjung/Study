@@ -2703,22 +2703,28 @@ def prepare_adcp_receptor(complex_pdb: Path, adcp_dir: Path):
         생성된 .trg 파일 Path, 실패 시 None
     """
     from Bio.PDB import PDBIO, Select
+    from Bio.PDB.NeighborSearch import NeighborSearch
 
     adcp_dir.mkdir(parents=True, exist_ok=True)
-    receptor_pdb   = adcp_dir / "receptor.pdb"
-    ligand_ref_pdb = adcp_dir / "ligand_ref.pdb"   # AGFR -l 용 펩타이드 참조
-    prepared_pdbqt = adcp_dir / "receptor_prepared.pdbqt"
-    trg_out        = adcp_dir / "target.trg"
+    receptor_pdb     = adcp_dir / "receptor.pdb"
+    ligand_ref_pdb   = adcp_dir / "ligand_ref.pdb"    # AGFR -l 용 펩타이드 참조(PDB)
+    ligand_ref_pdbqt = adcp_dir / "ligand_ref.pdbqt"  # AGFR -l 용 PDBQT(torsion tree 포함)
+    prepared_pdbqt   = adcp_dir / "receptor_prepared.pdbqt"
+    trg_out          = adcp_dir / "target.trg"
 
     # 이미 .trg 파일이 있으면 재생성 생략
     if trg_out.exists():
         print(f"  [INFO] 기존 .trg 파일 재사용: {trg_out}")
         return trg_out
 
-    # ── 1. 수용체/펩타이드 체인 분리 추출 ───────────────────────────
-    # AGFR에 `-l <peptide.pdb>` 로 ColabFold가 예측한 펩타이드 좌표를 넘기면
-    # AutoSite 자동 pocket detection 대신 실제 interface 위치를 기준으로
-    # box/translation points 가 정의되어 ADCP MC segfault(초기 clash)를 방지함.
+    # ── 1. 수용체/펩타이드 체인 분리 + interface residue 목록 추출 ──
+    # AGFR가 자동 pocket detection(AutoSite)으로 수용체 내부 cavity를 고르면
+    # 펩타이드 배치 시 초기 clash(>수백 kcal/mol) → MC segfault가 발생한다.
+    # ColabFold가 예측한 실제 interface 위치를 직접 지정해야 한다.
+    #   (a) AGFR -l <peptide.pdbqt> : torsion tree 있는 PDBQT 필요
+    #   (b) AGFR -b residues A:id,...: interface residue 목록으로 box 정의
+    # 둘 다 대비해 펩타이드 PDB와 interface residue 리스트를 함께 준비한다.
+    interface_residue_tokens = []  # 예: ["A:123", "A:124", ...]
     try:
         parser = PDBParser(QUIET=True)
         structure = parser.get_structure("complex", str(complex_pdb))
@@ -2746,9 +2752,66 @@ def prepare_adcp_receptor(complex_pdb: Path, adcp_dir: Path):
         print(f"  [INFO] 수용체 PDB 저장: {receptor_pdb}")
         io.save(str(ligand_ref_pdb), PeptideSelect())
         print(f"  [INFO] 펩타이드 참조 PDB 저장: {ligand_ref_pdb}")
+
+        # Interface residue: 펩타이드 원자로부터 5.0 Å 이내의 수용체 residue
+        try:
+            all_atoms = [a for a in structure[0].get_atoms()]
+            peptide_atoms = [
+                a for a in all_atoms
+                if a.get_parent().get_parent().id == peptide_chain
+            ]
+            ns = NeighborSearch(all_atoms)
+            interface_set = set()
+            for pa in peptide_atoms:
+                for res in ns.search(pa.get_coord(), 5.0, level="R"):
+                    cid = res.get_parent().id
+                    if cid in receptor_ids:
+                        resseq = res.id[1]
+                        interface_set.add((cid, resseq))
+            interface_residue_tokens = sorted(
+                f"{cid}:{resseq}" for cid, resseq in interface_set
+            )
+            print(f"  [INFO] Interface residue {len(interface_residue_tokens)}개 추출")
+        except Exception as e:
+            print(f"  [WARN] Interface residue 추출 실패(무시): {e}")
     except Exception as e:
         print(f"  [ERROR] 수용체/펩타이드 체인 추출 실패: {e}")
         return None
+
+    # ── 1.5. 펩타이드 PDB → PDBQT 변환 (AGFR -l 용 torsion tree 포함) ─
+    # AGFR는 -l에 plain PDB를 주면 "does not contain a torsion tree" 에러.
+    # prepare_ligand(ADFRsuite) 1순위, obabel 2순위로 변환 시도.
+    prep_lig_exe = shutil.which("prepare_ligand")
+    lig_prep_attempts = []
+    if prep_lig_exe:
+        lig_prep_attempts.append(
+            [prep_lig_exe, "-l", str(ligand_ref_pdb), "-o", str(ligand_ref_pdbqt)]
+        )
+    lig_prep_attempts.append(
+        [OBABEL_CMD, "-ipdb", str(ligand_ref_pdb), "-opdbqt",
+         "-O", str(ligand_ref_pdbqt)]
+    )
+
+    ligand_pdbqt_ok = False
+    for idx, cmd in enumerate(lig_prep_attempts, start=1):
+        try:
+            if ligand_ref_pdbqt.exists():
+                ligand_ref_pdbqt.unlink()
+            print(f"  [RUN] 펩타이드 PDBQT 변환 시도 {idx}: {' '.join(cmd)}")
+            subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if ligand_ref_pdbqt.exists() and ligand_ref_pdbqt.stat().st_size > 0:
+                # torsion tree 여부 최소 확인
+                content = ligand_ref_pdbqt.read_text(errors="ignore")
+                if "ROOT" in content:
+                    print(f"  [INFO] 펩타이드 PDBQT 변환 완료 (시도 {idx}): {ligand_ref_pdbqt}")
+                    ligand_pdbqt_ok = True
+                    break
+                else:
+                    print(f"  [WARN] 시도 {idx}: ROOT 태그 없음 — 다음 방법 시도")
+        except Exception as e:
+            print(f"  [WARN] 펩타이드 PDBQT 변환 시도 {idx} 에러: {e}")
+    if not ligand_pdbqt_ok:
+        print(f"  [WARN] 펩타이드 PDBQT 변환 실패 — AGFR -l 시도는 건너뜀")
 
     # ── 2. prepare_receptor 로 PDBQT 변환 ──────────────────────────
     # ADFRsuite 빌드에 따라 "-A hydrogens" 옵션이 없을 수 있어,
@@ -2774,33 +2837,49 @@ def prepare_adcp_receptor(complex_pdb: Path, adcp_dir: Path):
         print(f"  [WARN] prepare_receptor 전체 실패 → 원본 PDB로 AGFR 시도")
 
     # ── 3. AGFR 로 .trg 격자 파일 생성 ─────────────────────────────
-    # AGFR 빌드에 따라 출력 파일명이 "target.trg" 또는 "target_target.trg" 등
-    # 접두사가 두 번 붙는 경우가 있으므로, adcp_dir 내 *.trg 파일을 폴백 탐색한다.
-    #
     # 시도 순서:
-    #   1차) -l <peptide.pdb> + 넉넉한 padding 으로 펩타이드 주변 box 정의
-    #        → ADCP translation points 가 실제 interface 영역에 위치하여
-    #           초기 clash/segfault 회피.
-    #   2차) (1차 실패 시) -l 없이 AutoSite 자동 pocket detection 폴백.
+    #   1차) -l <peptide.pdbqt> + padding : 펩타이드 주변으로 box 정의
+    #        (torsion tree 포함 PDBQT 변환 성공 시에만 시도)
+    #   2차) -b residues <list>           : interface residue 로 box 정의
+    #        (AutoSite 우회, ADCP MC 초기 clash 회피)
+    #   3차) (최후 수단) -ng 만           : AutoSite 자동 pocket detection
     agfr_exe   = shutil.which(AGFR_CMD) or AGFR_CMD
     trg_prefix = adcp_dir / "target"
 
-    agfr_attempts = []
-    if ligand_ref_pdb.exists():
-        agfr_attempts.append([
-            agfr_exe,
-            "-r", str(receptor_input),
-            "-l", str(ligand_ref_pdb),
-            "-o", str(trg_prefix),
-            "-ng",
-            "--padding", "8.0",
-        ])
-    agfr_attempts.append([
-        agfr_exe, "-r", str(receptor_input), "-o", str(trg_prefix), "-ng",
-    ])
+    agfr_attempts = []  # list of (label, cmd)
+    if ligand_pdbqt_ok and ligand_ref_pdbqt.exists():
+        agfr_attempts.append((
+            "with -l ligand.pdbqt",
+            [
+                agfr_exe,
+                "-r", str(receptor_input),
+                "-l", str(ligand_ref_pdbqt),
+                "-o", str(trg_prefix),
+                "-ng",
+                "--padding", "8.0",
+            ],
+        ))
+    if interface_residue_tokens:
+        # AGFR -b residues A:123,A:124,... : 콤마 구분 토큰 하나
+        agfr_attempts.append((
+            f"with -b residues ({len(interface_residue_tokens)}개)",
+            [
+                agfr_exe,
+                "-r", str(receptor_input),
+                "-b", "residues",
+                ",".join(interface_residue_tokens),
+                "-o", str(trg_prefix),
+                "-ng",
+                "--padding", "8.0",
+            ],
+        ))
+    agfr_attempts.append((
+        "AutoSite fallback",
+        [agfr_exe, "-r", str(receptor_input), "-o", str(trg_prefix), "-ng"],
+    ))
 
     last_res = None
-    for idx, cmd in enumerate(agfr_attempts, start=1):
+    for idx, (label, cmd) in enumerate(agfr_attempts, start=1):
         # 이전 시도에서 남은 산출물이 있으면 정리 (중복 이름 충돌 방지)
         for leftover in adcp_dir.glob("target*.trg"):
             try:
@@ -2808,7 +2887,6 @@ def prepare_adcp_receptor(complex_pdb: Path, adcp_dir: Path):
             except OSError:
                 pass
         try:
-            label = "with -l ligand" if "-l" in cmd else "AutoSite fallback"
             print(f"  [RUN] AGFR 시도 {idx} ({label}): {' '.join(cmd)}")
             last_res = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
             if trg_out.exists():
