@@ -206,7 +206,88 @@ ADCP_SHORT_PEP_STRATEGY = os.environ.get("ADCP_SHORT_PEP_STRATEGY", "skip")
 
 ---
 
-## 7. 실행 환경 요약
+## 7. ADCP 스코어의 의미 (중요 — 해석상 주의)
+
+본 파이프라인의 ADCP 단계는 **ColabFold가 예측한 복합체 포즈 자체를 스코어링하지 않습니다**. 재도킹(re-docking)을 수행합니다. 따라서 `adcp_score` 는 "우리가 생성한 복합체의 결합 에너지"와 다릅니다.
+
+### 7.1 파이프라인의 실제 ADCP 흐름
+
+```
+ColabFold + OpenMM 복합체 PDB (receptor + peptide 같이 배치됨)
+         │
+         ├─ 체인 분리 (prepare_adcp_receptor)
+         │  • 긴 체인 → receptor.pdb
+         │  • 짧은 체인 → ligand_ref.pdb  ← 박스 중심 계산용으로만 사용
+         │
+         ├─ AGFR로 target.trg 생성
+         │  • ligand_ref 좌표로 박스 중심/크기 결정 (8 Å 패딩)
+         │  • target.trg = 박스 내부의 AutoDock grid maps
+         │
+         └─ ADCP 실행 (run_adcp_on_rank1)
+              입력: target.trg + 펩타이드 서열(문자열)
+              ❌ ColabFold가 예측한 펩타이드 좌표는 ADCP에 전달되지 않음
+              ✅ ADCP는 서열로부터 처음부터 Replica Exchange MC 샘플링
+              → ADCP가 독립적으로 찾은 베스트 포즈 + 스코어 반환
+```
+
+**핵심**: `ligand_ref.pdb` 는 **박스 영역 정의**(center, size)용으로만 쓰이고, 펩타이드의 좌표 정보는 ADCP 도킹 과정에서 완전히 버려집니다.
+
+### 7.2 각 스코어가 평가하는 대상
+
+| 스코어 컬럼 | 평가 대상 | ColabFold 포즈 스코어인가? |
+|----------|--------|------|
+| `vina_score` | ColabFold가 예측한 그 포즈의 에너지 (score_only) | ✅ 네 |
+| `prodigy_dG` | ColabFold 복합체의 contact 기반 ΔG 추정 | ✅ 네 |
+| `plip_*` (H-bond, salt bridge 개수 등) | ColabFold 복합체의 상호작용 분석 | ✅ 네 |
+| **`adcp_score`** | **같은 pocket 내에서 ADCP가 독립 재도킹한 포즈**의 에너지 | **❌ 아니요 (다른 포즈일 수 있음)** |
+
+### 7.3 그럼 ADCP를 왜 돌리는가?
+
+1. **교차검증 (cross-validation)**
+   - ColabFold(ML 접힘 예측) + ADCP(물리 기반 MC 도킹)는 서로 **완전히 다른 방법**
+   - 같은 pocket에서 양쪽이 비슷한 에너지에 수렴하면 → 해당 후보의 결합 가능성 신뢰도 ↑
+   - ADCP 스코어가 Vina/PRODIGY 대비 유독 나쁘면 → ColabFold가 예측한 포즈가 물리적으로 비현실적일 가능성
+
+2. **펩타이드 서열의 pocket 적합성 순위 (ranking)**
+   - 후보 N개를 ADCP로 돌리면, 어떤 서열이 이 pocket에서 **잠재적으로** 가장 좋은 점수를 낼 수 있는지 비교 가능
+   - Vina와 독립적인 물리 기반 ranking 제공
+
+3. **Outlier 감지**
+   - Vina 순위와 ADCP 순위가 크게 다른 후보는 추가 검토 대상
+
+### 7.4 ADCP_score 해석 시 체크리스트
+
+| 관찰 | 해석 |
+|------|------|
+| `vina_score ≈ adcp_score` 이고 둘 다 음수 | 두 방법 일치 → 높은 신뢰도 |
+| `adcp_score` 가 Vina보다 훨씬 음수 | ColabFold 포즈가 suboptimal, ADCP가 더 나은 포즈 발견 |
+| `adcp_score` 가 Vina보다 훨씬 덜 음수(또는 양수) | ADCP MC가 pocket을 제대로 못 찾음 or ColabFold 포즈가 unique하게 좋은 경우 |
+| 모든 후보의 `adcp_score` 가 유사 | pocket 선택성이 낮거나 ADCP 샘플링이 부족 (run/step 늘려볼 것) |
+
+### 7.5 "진짜 ColabFold 복합체의 ADCP-급 스코어"가 필요하면?
+
+ADCP는 pose-fixed 스코어링 모드를 지원하지 않으므로 다른 툴을 사용해야 합니다.
+
+| 방법 | 가능 여부 | 비고 |
+|------|---------|------|
+| ADCP 자체를 score-only로 돌리기 | ❌ 불가 | MC 샘플링이 필수 구성요소 |
+| **Rosetta FlexPepDock `-refine`** | ✅ 가능 | ColabFold 포즈 기반 국소 refine → pose-preserving |
+| **ADCP 결과 포즈 ↔ ColabFold 포즈 RMSD 체크** | ✅ 간접 | RMSD < 3 Å 이면 ADCP 스코어를 ColabFold 포즈 근사치로 간주 가능 |
+| **MM-GBSA / MM-PBSA** (OpenMM) | ✅ 엄밀 | 계산 비용 큼, 가장 물리적으로 정확 |
+| **기존 Vina + PRODIGY로 충분히 판단** | ✅ 실용 | 대부분의 스크리닝 목적엔 이걸로 충분 |
+
+### 7.6 권장 해석 방침
+
+본 파이프라인의 엑셀 결과를 읽을 때:
+
+- **"ColabFold가 예측한 복합체의 결합 에너지"를 알고 싶다** → `vina_score`, `prodigy_dG` 참고
+- **"펩타이드 서열 간 상대적 우위"를 보고 싶다** → `vina_score`, `adcp_score` 둘 다 참고
+- **"물리적으로 현실적인 포즈인가"를 검증하고 싶다** → `vina_score` ≈ `adcp_score` 일치도 확인
+- `adcp_score` 만 단독으로 "우리 복합체의 결합 에너지"로 보고하지 말 것
+
+---
+
+## 8. 실행 환경 요약
 
 - OS: WSL Ubuntu
 - ADFRsuite: 1.1 (`/home/aisys/ADFRsuite_1.1/`), Python 3 번들
