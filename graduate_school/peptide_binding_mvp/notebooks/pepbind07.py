@@ -2706,6 +2706,7 @@ def prepare_adcp_receptor(complex_pdb: Path, adcp_dir: Path):
 
     adcp_dir.mkdir(parents=True, exist_ok=True)
     receptor_pdb   = adcp_dir / "receptor.pdb"
+    ligand_ref_pdb = adcp_dir / "ligand_ref.pdb"   # AGFR -l 용 펩타이드 참조
     prepared_pdbqt = adcp_dir / "receptor_prepared.pdbqt"
     trg_out        = adcp_dir / "target.trg"
 
@@ -2714,7 +2715,10 @@ def prepare_adcp_receptor(complex_pdb: Path, adcp_dir: Path):
         print(f"  [INFO] 기존 .trg 파일 재사용: {trg_out}")
         return trg_out
 
-    # ── 1. 수용체 체인 추출 ─────────────────────────────────────────
+    # ── 1. 수용체/펩타이드 체인 분리 추출 ───────────────────────────
+    # AGFR에 `-l <peptide.pdb>` 로 ColabFold가 예측한 펩타이드 좌표를 넘기면
+    # AutoSite 자동 pocket detection 대신 실제 interface 위치를 기준으로
+    # box/translation points 가 정의되어 ADCP MC segfault(초기 clash)를 방지함.
     try:
         parser = PDBParser(QUIET=True)
         structure = parser.get_structure("complex", str(complex_pdb))
@@ -2732,12 +2736,18 @@ def prepare_adcp_receptor(complex_pdb: Path, adcp_dir: Path):
             def accept_chain(self, chain):
                 return chain.id in receptor_ids
 
+        class PeptideSelect(Select):
+            def accept_chain(self, chain):
+                return chain.id == peptide_chain
+
         io = PDBIO()
         io.set_structure(structure)
         io.save(str(receptor_pdb), ReceptorSelect())
         print(f"  [INFO] 수용체 PDB 저장: {receptor_pdb}")
+        io.save(str(ligand_ref_pdb), PeptideSelect())
+        print(f"  [INFO] 펩타이드 참조 PDB 저장: {ligand_ref_pdb}")
     except Exception as e:
-        print(f"  [ERROR] 수용체 체인 추출 실패: {e}")
+        print(f"  [ERROR] 수용체/펩타이드 체인 추출 실패: {e}")
         return None
 
     # ── 2. prepare_receptor 로 PDBQT 변환 ──────────────────────────
@@ -2766,31 +2776,58 @@ def prepare_adcp_receptor(complex_pdb: Path, adcp_dir: Path):
     # ── 3. AGFR 로 .trg 격자 파일 생성 ─────────────────────────────
     # AGFR 빌드에 따라 출력 파일명이 "target.trg" 또는 "target_target.trg" 등
     # 접두사가 두 번 붙는 경우가 있으므로, adcp_dir 내 *.trg 파일을 폴백 탐색한다.
+    #
+    # 시도 순서:
+    #   1차) -l <peptide.pdb> + 넉넉한 padding 으로 펩타이드 주변 box 정의
+    #        → ADCP translation points 가 실제 interface 영역에 위치하여
+    #           초기 clash/segfault 회피.
+    #   2차) (1차 실패 시) -l 없이 AutoSite 자동 pocket detection 폴백.
     agfr_exe   = shutil.which(AGFR_CMD) or AGFR_CMD
     trg_prefix = adcp_dir / "target"
-    try:
-        print(f"  [RUN] {agfr_exe} -r {receptor_input} -o {trg_prefix} -ng")
-        res = subprocess.run(
-            [agfr_exe, "-r", str(receptor_input), "-o", str(trg_prefix), "-ng"],
-            capture_output=True, text=True, timeout=600,
-        )
-        # 1순위: 기대 경로 (target.trg)
-        if trg_out.exists():
-            print(f"  [INFO] .trg 파일 생성 완료: {trg_out}")
-            return trg_out
-        # 2순위: adcp_dir 내 생성된 임의의 *.trg 파일 탐색
-        trg_candidates = sorted(adcp_dir.glob("*.trg"))
-        if trg_candidates:
-            fallback = trg_candidates[0]
-            print(f"  [INFO] .trg 파일 생성 완료 (폴백 탐색): {fallback}")
-            return fallback
-        print(f"  [WARN] agfr .trg 생성 실패")
-        if res.stdout: print(f"         stdout: {res.stdout[-300:]}")
-        if res.stderr: print(f"         stderr: {res.stderr[-300:]}")
-        return None
-    except Exception as e:
-        print(f"  [ERROR] AGFR 실행 실패: {e}")
-        return None
+
+    agfr_attempts = []
+    if ligand_ref_pdb.exists():
+        agfr_attempts.append([
+            agfr_exe,
+            "-r", str(receptor_input),
+            "-l", str(ligand_ref_pdb),
+            "-o", str(trg_prefix),
+            "-ng",
+            "--padding", "8.0",
+        ])
+    agfr_attempts.append([
+        agfr_exe, "-r", str(receptor_input), "-o", str(trg_prefix), "-ng",
+    ])
+
+    last_res = None
+    for idx, cmd in enumerate(agfr_attempts, start=1):
+        # 이전 시도에서 남은 산출물이 있으면 정리 (중복 이름 충돌 방지)
+        for leftover in adcp_dir.glob("target*.trg"):
+            try:
+                leftover.unlink()
+            except OSError:
+                pass
+        try:
+            label = "with -l ligand" if "-l" in cmd else "AutoSite fallback"
+            print(f"  [RUN] AGFR 시도 {idx} ({label}): {' '.join(cmd)}")
+            last_res = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            if trg_out.exists():
+                print(f"  [INFO] .trg 파일 생성 완료 (시도 {idx}): {trg_out}")
+                return trg_out
+            # 다른 이름으로 생긴 *.trg 폴백 탐색
+            trg_candidates = sorted(adcp_dir.glob("*.trg"))
+            if trg_candidates:
+                fallback = trg_candidates[0]
+                print(f"  [INFO] .trg 파일 생성 완료 (시도 {idx}, 폴백 탐색): {fallback}")
+                return fallback
+            print(f"  [WARN] AGFR 시도 {idx} 실패 (파일 미생성)")
+            if last_res.stdout: print(f"         stdout: {last_res.stdout[-300:]}")
+            if last_res.stderr: print(f"         stderr: {last_res.stderr[-300:]}")
+        except Exception as e:
+            print(f"  [ERROR] AGFR 시도 {idx} 실행 에러: {e}")
+
+    print(f"  [WARN] 모든 AGFR 시도 실패")
+    return None
 
 # === STEP 4b: ADCP (AutoDock CrankPep) 펩타이드 도킹 ===============
 # =====================================================================
