@@ -2541,10 +2541,19 @@ def run_vina_on_rank1(rank1_pdbs, vina_dir: Path):
         row_data["ligand_pdbqt"] = lig_pdbqt.name
 
         # score_only 모드: 포즈 탐색 없이 현재 구조의 결합 에너지만 평가
+        # ※ 이 버전(23d1252-mod)은 --score_only 시에도 grid box를 명시해야 함.
+        #   넘기지 않으면 size=0 으로 초기화되어 "Grid box dimensions must be > 0" 에러 발생.
+        box = compute_box_from_ligand(lig_pdb, padding=10.0)
         vina_cmd = (
             f"{VINA_CMD} "
             f"--receptor {rec_pdbqt} "
             f"--ligand {lig_pdbqt} "
+            f"--center_x {box['center_x']:.3f} "
+            f"--center_y {box['center_y']:.3f} "
+            f"--center_z {box['center_z']:.3f} "
+            f"--size_x {box['size_x']:.3f} "
+            f"--size_y {box['size_y']:.3f} "
+            f"--size_z {box['size_z']:.3f} "
             f"--score_only"
         )
 
