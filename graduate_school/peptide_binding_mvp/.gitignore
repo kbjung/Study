@@ -1,0 +1,13 @@
+
+# 비밀 키 (절대 커밋 금지)
+HuggingFace Access token.txt
+*token*.txt
+.env
+
+# Claude Code 로컬 설정, 워크트리
+.claude/settings.local.json
+notebooks/.claude/
+
+# Python 캐시
+__pycache__/
+*.pyc

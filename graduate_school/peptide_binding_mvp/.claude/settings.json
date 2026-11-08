@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./HuggingFace Access token.txt)",
+      "Read(**/*token*)",
+      "Read(**/*.env)"
+    ]
+  }
+}
