@@ -24,8 +24,8 @@ pepbind08.py - FinalScore에서 PLIP 제외, ADCP 컬럼 조건부 출력 버전
   ipTM    0.10
 
 권장 실행 환경
-- conda env: pepbind_openmm (Python 3.11)
-- Jupyter kernel: pepbind_openmm (동일 env에 연결)
+- conda env: pep_o (Python 3.11.14)
+- Jupyter kernel: python3 (pep_o env 내장 커널, 별도 등록 커널 없음)
 """
 
 
