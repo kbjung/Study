@@ -13,10 +13,10 @@
 - 메인 코드: `notebooks/pepbind08.py` (약 5,400줄, 2026-11-09 생성). `pepbind07.py` 기반이며 FinalScore에서 PLIP을 제외(0.60/0.30/0.10), 기본값을 100/9/RUN_ADCP=0으로 되돌리고, RUN_ADCP=0이면 최종 Excel에서 ADCP 컬럼(`ADCP_score`, `ADCP_padded`, `ADCP_seq_used`)을 제외한다(`filter_adcp_headers()` 한 곳에서 처리).
 - 이전 버전: `pepbind06.py`(약 4,900줄)와 `pepbind07.py`(ADCP 짧은 펩타이드 패딩, .trg 자동 생성, 부분 결과 파싱 추가)는 수정하지 않고 보존한다. 06, 07, 08 통합 방침은 **제이가 결정 중**. 08은 아직 공용 PC에서 실행 검증 전이다.
 - 코드는 이 PC(`C:\Users\kbjoo\Documents\GitHub\Study\graduate_school\peptide_binding_mvp`)에 있고, **실제 실행은 연구실 공용 PC(Windows 10) 안의 WSL2**에서 한다. 이 PC에서는 파이프라인을 돌리지 않는다.
-- 공용 PC: i7-12700, RTX 3070 8GB, RAM 32GB, WSL2 Ubuntu 22.04.5, conda env `pepbind_openmm` (Python 3.11).
-- Jupyter 커널 이름: **(제이가 추후 기입)**
+- 공용 PC: i7-12700, RTX 3070 8GB, RAM 32GB, WSL2 Ubuntu 22.04.5, conda env `pep_o` (Python 3.11.14, 2026-04 생성, pepbind08 실행 기준). 같은 PC에 구 env `pepbind_openmm`, `pepbind`도 남아 있다.
+- Jupyter 커널 이름: `python3` (pep_o env 내장 커널, 경로 `~/miniconda3/envs/pep_o/share/jupyter/kernels/python3`). 사용자 등록 커널은 `pepbind`, `pepbind_openmm` 두 개이며 pep_o용 별도 커널은 없다. 노트북에서 구 커널 `pepbind_openmm`을 고르지 않도록 주의.
 - 기본 작업 폴더: 환경변수 `PEPBIND_BASE_DIR` (기본 `~/work/pipeline`).
-- 실행 예: `cd ~/work/pipeline; source ~/miniconda3/etc/profile.d/conda.sh; conda activate pepbind_openmm; python3 pepbind08.py`
+- 실행 예: `cd ~/work/pipeline; source ~/miniconda3/etc/profile.d/conda.sh; conda activate pep_o; python3 pepbind08.py`
 - 환경 정의: `notebooks/pepbind_full.yml`, `notebooks/pepbind_min.yml`
 - 외부 툴: ColabFold(AF-Multimer), OpenMM, AutoDock Vina, PLIP, PRODIGY, OpenBabel, PyTorch+Transformers. ADCP는 미설치(RUN_ADCP=0).
 - 오프라인 MSA DB(UniRef30 + PDB70, 약 120GB) 구축은 계획 단계.
